@@ -1,4 +1,4 @@
-import { Application, Container } from 'pixi.js';
+import { Application, Container, Graphics, Text } from 'pixi.js';
 import { GamePhase, TileType, OreType, EncounterType } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
 import { SCALED_TILE } from '../utils/constants';
@@ -38,6 +38,19 @@ export class GameManager {
   elapsedMs: number = 0;
   countdownValue: number = 3;
 
+  private centerIndicator: Container;
+  private centerArrow: Graphics;
+  private centerDistText: Text;
+  private centerBeacon: Graphics;
+  private beaconPhase: number = 0;
+
+  private opponentIndicator: Container;
+  private opponentArrow: Graphics;
+  private opponentDot: Graphics;
+  private lastKnownOpponentX: number = -1;
+  private lastKnownOpponentY: number = -1;
+  private opponentIndicatorLife: number = 0;
+
   private eventCallbacks: Set<GameEventCallback> = new Set();
   private lastClickTime: number = 0;
   private clickCount: number = 0;
@@ -69,6 +82,34 @@ export class GameManager {
     this.worldContainer.addChild(this.particles.container);
     this.worldContainer.addChild(this.fog.container);
     this.uiContainer.addChild(this.juice.container);
+
+    this.centerBeacon = new Graphics();
+    this.worldContainer.addChild(this.centerBeacon);
+
+    this.centerIndicator = new Container();
+    this.centerArrow = new Graphics();
+    this.centerDistText = new Text({
+      text: '',
+      style: {
+        fontFamily: '"Press Start 2P", monospace',
+        fontSize: 10,
+        fill: 0x00CED1,
+        stroke: { color: 0x000000, width: 3 },
+      },
+    });
+    this.centerDistText.anchor.set(0.5, 0);
+    this.centerIndicator.addChild(this.centerArrow);
+    this.centerIndicator.addChild(this.centerDistText);
+    this.centerIndicator.visible = false;
+    this.uiContainer.addChild(this.centerIndicator);
+
+    this.opponentIndicator = new Container();
+    this.opponentArrow = new Graphics();
+    this.opponentDot = new Graphics();
+    this.opponentIndicator.addChild(this.opponentArrow);
+    this.opponentIndicator.addChild(this.opponentDot);
+    this.opponentIndicator.visible = false;
+    this.uiContainer.addChild(this.opponentIndicator);
 
     this.camera.setScreenSize(app.screen.width, app.screen.height);
 
@@ -127,11 +168,13 @@ export class GameManager {
           const cwy = (cz.y + cz.height / 2) * SCALED_TILE;
           this.particles.digDust(cwx, cwy, TileType.CRYSTAL_WALL);
           this.camera.shake(3, 80);
+          this.player.triggerDig(cz.x + 1, cz.y + 1);
           audioManager.playDig(TileType.CRYSTAL_WALL);
         }
         return;
       }
 
+      this.player.triggerDig(tilePos.x, tilePos.y);
       socketManager.send({ type: 'DIG', payload: { tileX: tilePos.x, tileY: tilePos.y } });
     });
 
@@ -184,6 +227,8 @@ export class GameManager {
           this.lighting.updateLantern(p.spawnX, p.spawnY, 1);
           this.lighting.updateOreGlows(this.gameMap.tiles, this.fog.revealed);
 
+          this.drawCenterBeacon();
+
           this.emit('matchFound', { opponentName: p.opponentName });
           break;
         }
@@ -198,6 +243,7 @@ export class GameManager {
           this.phase = GamePhase.DIGGING;
           this.startTime = Date.now();
           audioManager.init();
+          this.centerIndicator.visible = true;
           this.emit('gameStart', {});
           break;
         }
@@ -218,6 +264,7 @@ export class GameManager {
             this.camera.microZoom(0.02, 200);
             this.juice.freezeFrame(33);
             this.lighting.flashBreak(wx, wy);
+            this.player.triggerImpact();
             audioManager.playBreak(prevType, this.player.x);
 
             this.fog.revealAround(t.x, t.y, this.player.upgrades.lanternLevel);
@@ -287,6 +334,11 @@ export class GameManager {
           this.particles.tremorShake();
           this.camera.shake(3, 300);
           audioManager.playTremor();
+
+          const dir = msg.payload.direction;
+          if (dir) {
+            this.showOpponentDirection(dir);
+          }
           this.emit('tremor', msg.payload);
           break;
         }
@@ -309,6 +361,9 @@ export class GameManager {
               sr.enemyX * SCALED_TILE + SCALED_TILE / 2,
               sr.enemyY * SCALED_TILE + SCALED_TILE / 2,
             );
+            this.lastKnownOpponentX = sr.enemyX;
+            this.lastKnownOpponentY = sr.enemyY;
+            this.opponentIndicatorLife = 5000;
           }
           break;
         }
@@ -333,6 +388,7 @@ export class GameManager {
           audioManager.playEncounterReveal();
           this.camera.shake(10, 500);
           this.juice.flash(0xFFFFFF, 0.3, 300);
+          this.centerIndicator.visible = false;
           this.emit('encounterStart', es);
           break;
         }
@@ -380,6 +436,8 @@ export class GameManager {
             audioManager.playDefeat();
           }
           this.combat.endEncounter();
+          this.centerIndicator.visible = false;
+          this.opponentIndicator.visible = false;
           this.emit('gameOver', go);
           break;
         }
@@ -390,6 +448,152 @@ export class GameManager {
         }
       }
     });
+  }
+
+  private showOpponentDirection(direction: string) {
+    const dirMap: Record<string, [number, number]> = {
+      'north': [0, -1], 'south': [0, 1],
+      'east': [1, 0], 'west': [-1, 0],
+      'northeast': [1, -1], 'northwest': [-1, -1],
+      'southeast': [1, 1], 'southwest': [-1, 1],
+    };
+    const dir = dirMap[direction.toLowerCase()];
+    if (!dir) return;
+
+    const estimatedDist = 15;
+    this.lastKnownOpponentX = this.player.x + dir[0] * estimatedDist;
+    this.lastKnownOpponentY = this.player.y + dir[1] * estimatedDist;
+    this.opponentIndicatorLife = 4000;
+  }
+
+  private drawCenterBeacon() {
+    const cz = BALANCE.CENTER_ZONE;
+    const cx = (cz.x + cz.width / 2) * SCALED_TILE;
+    const cy = (cz.y + cz.height / 2) * SCALED_TILE;
+    this.centerBeacon.x = cx;
+    this.centerBeacon.y = cy;
+  }
+
+  private updateCenterBeacon(dt: number) {
+    this.beaconPhase += dt * 0.003;
+    this.centerBeacon.clear();
+
+    const pulse = 0.5 + Math.sin(this.beaconPhase) * 0.3;
+    const pulse2 = 0.5 + Math.sin(this.beaconPhase * 1.3 + 1) * 0.3;
+
+    for (let i = 3; i >= 0; i--) {
+      const r = (i + 1) * 20 + Math.sin(this.beaconPhase + i) * 5;
+      this.centerBeacon.circle(0, 0, r);
+      this.centerBeacon.fill({ color: 0x00CED1, alpha: (0.03 + pulse * 0.02) * (1 - i * 0.2) });
+    }
+
+    this.centerBeacon.circle(0, 0, 8 + Math.sin(this.beaconPhase * 2) * 2);
+    this.centerBeacon.fill({ color: 0x00CED1, alpha: 0.15 + pulse2 * 0.1 });
+
+    const rays = 6;
+    for (let i = 0; i < rays; i++) {
+      const angle = (i / rays) * Math.PI * 2 + this.beaconPhase * 0.5;
+      const len = 30 + Math.sin(this.beaconPhase * 2 + i) * 10;
+      this.centerBeacon.moveTo(0, 0);
+      this.centerBeacon.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
+      this.centerBeacon.stroke({ color: 0x00CED1, width: 1, alpha: 0.08 + pulse * 0.05 });
+    }
+  }
+
+  private updateCenterIndicator() {
+    if (this.phase !== GamePhase.DIGGING) return;
+
+    const cz = BALANCE.CENTER_ZONE;
+    const centerTileX = cz.x + cz.width / 2;
+    const centerTileY = cz.y + cz.height / 2;
+
+    const dx = centerTileX - this.player.x;
+    const dy = centerTileY - this.player.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    const centerScreenX = this.camera.screenWidth / 2 + (centerTileX * SCALED_TILE + SCALED_TILE / 2 - this.camera.currentX) * this.camera.zoom;
+    const centerScreenY = this.camera.screenHeight / 2 + (centerTileY * SCALED_TILE + SCALED_TILE / 2 - this.camera.currentY) * this.camera.zoom;
+
+    const margin = 60;
+    const onScreen = centerScreenX > margin && centerScreenX < this.camera.screenWidth - margin &&
+                     centerScreenY > margin && centerScreenY < this.camera.screenHeight - margin;
+
+    if (onScreen && dist < 8) {
+      this.centerIndicator.visible = false;
+      return;
+    }
+
+    this.centerIndicator.visible = true;
+
+    const angle = Math.atan2(dy, dx);
+    const edgeMargin = 50;
+    const hw = this.camera.screenWidth / 2 - edgeMargin;
+    const hh = this.camera.screenHeight / 2 - edgeMargin;
+
+    let indicatorX = this.camera.screenWidth / 2 + Math.cos(angle) * hw;
+    let indicatorY = this.camera.screenHeight / 2 + Math.sin(angle) * hh;
+
+    indicatorX = Math.max(edgeMargin, Math.min(this.camera.screenWidth - edgeMargin, indicatorX));
+    indicatorY = Math.max(edgeMargin, Math.min(this.camera.screenHeight - edgeMargin, indicatorY));
+
+    this.centerIndicator.x = indicatorX;
+    this.centerIndicator.y = indicatorY;
+
+    this.centerArrow.clear();
+    const arrowSize = 12;
+    this.centerArrow.moveTo(Math.cos(angle) * arrowSize, Math.sin(angle) * arrowSize);
+    this.centerArrow.lineTo(Math.cos(angle + 2.5) * arrowSize * 0.7, Math.sin(angle + 2.5) * arrowSize * 0.7);
+    this.centerArrow.lineTo(Math.cos(angle - 2.5) * arrowSize * 0.7, Math.sin(angle - 2.5) * arrowSize * 0.7);
+    this.centerArrow.closePath();
+    this.centerArrow.fill({ color: 0x00CED1, alpha: 0.8 });
+
+    this.centerArrow.circle(0, 0, 4);
+    this.centerArrow.fill({ color: 0x00CED1, alpha: 0.5 });
+
+    this.centerDistText.text = `${Math.round(dist)}`;
+    this.centerDistText.y = 16;
+  }
+
+  private updateOpponentIndicator(dt: number) {
+    if (this.opponentIndicatorLife <= 0 || this.lastKnownOpponentX < 0) {
+      this.opponentIndicator.visible = false;
+      return;
+    }
+
+    this.opponentIndicatorLife -= dt;
+    this.opponentIndicator.visible = true;
+
+    const dx = this.lastKnownOpponentX - this.player.x;
+    const dy = this.lastKnownOpponentY - this.player.y;
+    const angle = Math.atan2(dy, dx);
+
+    const edgeMargin = 50;
+    const hw = this.camera.screenWidth / 2 - edgeMargin;
+    const hh = this.camera.screenHeight / 2 - edgeMargin;
+
+    let indicatorX = this.camera.screenWidth / 2 + Math.cos(angle) * hw;
+    let indicatorY = this.camera.screenHeight / 2 + Math.sin(angle) * hh;
+
+    indicatorX = Math.max(edgeMargin, Math.min(this.camera.screenWidth - edgeMargin, indicatorX));
+    indicatorY = Math.max(edgeMargin, Math.min(this.camera.screenHeight - edgeMargin, indicatorY));
+
+    this.opponentIndicator.x = indicatorX;
+    this.opponentIndicator.y = indicatorY;
+
+    const fadeAlpha = Math.min(1, this.opponentIndicatorLife / 1000);
+    const pulse = 0.6 + Math.sin(Date.now() * 0.008) * 0.4;
+
+    this.opponentArrow.clear();
+    const arrowSize = 10;
+    this.opponentArrow.moveTo(Math.cos(angle) * arrowSize, Math.sin(angle) * arrowSize);
+    this.opponentArrow.lineTo(Math.cos(angle + 2.5) * arrowSize * 0.7, Math.sin(angle + 2.5) * arrowSize * 0.7);
+    this.opponentArrow.lineTo(Math.cos(angle - 2.5) * arrowSize * 0.7, Math.sin(angle - 2.5) * arrowSize * 0.7);
+    this.opponentArrow.closePath();
+    this.opponentArrow.fill({ color: 0xFF4444, alpha: 0.7 * fadeAlpha * pulse });
+
+    this.opponentDot.clear();
+    this.opponentDot.circle(0, 0, 3);
+    this.opponentDot.fill({ color: 0xFF4444, alpha: 0.5 * fadeAlpha });
   }
 
   joinQueue() {
@@ -445,6 +649,10 @@ export class GameManager {
           const cwy = (cz.y + cz.height / 2) * SCALED_TILE;
           this.particles.guardianAura(cwx, cwy);
         }
+
+        this.updateCenterBeacon(dt);
+        this.updateCenterIndicator();
+        this.updateOpponentIndicator(dt);
       }
 
       this.camera.update(dt);

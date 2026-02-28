@@ -1,11 +1,12 @@
-import { Container, Graphics, RenderTexture, Sprite, Texture } from 'pixi.js';
-import { TileType, OreType, TileData, MapConfig } from '@dig/shared';
+import { Container, Graphics } from 'pixi.js';
+import { TileType, OreType, TileData } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
 import { SCALED_TILE, TILE_COLORS, ORE_COLORS } from '../utils/constants';
 import { SeededRandom } from '../utils/helpers';
 
 export class GameMap {
   container: Container;
+  bgContainer: Container;
   tiles: TileData[][];
   tileSprites: (Graphics | null)[][];
   crackOverlays: (Graphics | null)[][];
@@ -15,6 +16,7 @@ export class GameMap {
 
   constructor() {
     this.container = new Container();
+    this.bgContainer = new Container();
     this.tiles = [];
     this.tileSprites = [];
     this.crackOverlays = [];
@@ -250,9 +252,37 @@ export class GameMap {
 
   buildSprites() {
     this.container.removeChildren();
+    this.bgContainer.removeChildren();
     this.tileSprites = [];
     this.crackOverlays = [];
     this.oreOverlays = [];
+
+    const bgRng = new SeededRandom(12345);
+
+    const bg = new Graphics();
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        const biome = this.getBiome(x);
+        let bgColor: number;
+        switch (biome) {
+          case 'SOIL': bgColor = 0x0D0806; break;
+          case 'STONE': bgColor = 0x08090B; break;
+          case 'DEEP_ROCK': bgColor = 0x06060C; break;
+          case 'CORE': bgColor = 0x040408; break;
+          default: bgColor = 0x08090B;
+        }
+        bg.rect(x * SCALED_TILE, y * SCALED_TILE, SCALED_TILE, SCALED_TILE);
+        bg.fill(bgColor);
+
+        if (bgRng.next() < 0.15) {
+          const dotX = x * SCALED_TILE + bgRng.next() * SCALED_TILE;
+          const dotY = y * SCALED_TILE + bgRng.next() * SCALED_TILE;
+          bg.circle(dotX, dotY, 1);
+          bg.fill({ color: 0x444444, alpha: 0.2 });
+        }
+      }
+    }
+    this.container.addChild(bg);
 
     for (let y = 0; y < this.height; y++) {
       this.tileSprites[y] = [];
@@ -270,7 +300,7 @@ export class GameMap {
         }
 
         const g = new Graphics();
-        this.drawTile(g, tile);
+        this.drawTile(g, tile, x, y);
         g.x = x * SCALED_TILE;
         g.y = y * SCALED_TILE;
         this.container.addChild(g);
@@ -278,7 +308,7 @@ export class GameMap {
 
         if (tile.ore !== OreType.NONE) {
           const oreG = new Graphics();
-          this.drawOreOverlay(oreG, tile.ore);
+          this.drawOreOverlay(oreG, tile.ore, x, y);
           oreG.x = x * SCALED_TILE;
           oreG.y = y * SCALED_TILE;
           this.container.addChild(oreG);
@@ -292,48 +322,124 @@ export class GameMap {
     }
   }
 
-  private drawTile(g: Graphics, tile: TileData) {
+  private drawTile(g: Graphics, tile: TileData, tx: number, ty: number) {
     const baseColor = TILE_COLORS[tile.type] || 0x4A4A4A;
-    g.rect(0, 0, SCALED_TILE, SCALED_TILE);
+    const S = SCALED_TILE;
+
+    g.rect(0, 0, S, S);
     g.fill(baseColor);
 
-    g.rect(0, 0, SCALED_TILE, 2);
-    g.fill({ color: 0xffffff, alpha: 0.06 });
-    g.rect(0, SCALED_TILE - 2, SCALED_TILE, 2);
-    g.fill({ color: 0x000000, alpha: 0.15 });
-    g.rect(SCALED_TILE - 1, 0, 1, SCALED_TILE);
-    g.fill({ color: 0x000000, alpha: 0.1 });
+    const rng = new SeededRandom(tx * 1000 + ty);
+
+    for (let i = 0; i < 4; i++) {
+      const rx = rng.next() * S;
+      const ry = rng.next() * S;
+      const rs = 4 + rng.next() * 8;
+      const variation = rng.next() > 0.5 ? 0.08 : -0.06;
+      g.rect(rx, ry, rs, rs);
+      g.fill({ color: variation > 0 ? 0xffffff : 0x000000, alpha: Math.abs(variation) });
+    }
+
+    g.rect(0, 0, S, 2);
+    g.fill({ color: 0xffffff, alpha: 0.08 });
+    g.rect(0, S - 2, S, 2);
+    g.fill({ color: 0x000000, alpha: 0.18 });
+    g.rect(S - 1, 0, 1, S);
+    g.fill({ color: 0x000000, alpha: 0.12 });
+    g.rect(0, 0, 1, S);
+    g.fill({ color: 0xffffff, alpha: 0.04 });
 
     if (tile.type === TileType.CRYSTAL_WALL) {
-      const cx = SCALED_TILE * 0.3, cy = SCALED_TILE * 0.5;
-      g.moveTo(cx, cy - 12);
-      g.lineTo(cx + 8, cy);
-      g.lineTo(cx, cy + 12);
-      g.lineTo(cx - 8, cy);
+      const cx1 = S * 0.3, cy1 = S * 0.5;
+      g.moveTo(cx1, cy1 - 14);
+      g.lineTo(cx1 + 10, cy1);
+      g.lineTo(cx1, cy1 + 14);
+      g.lineTo(cx1 - 10, cy1);
       g.closePath();
-      g.fill({ color: 0x00CED1, alpha: 0.3 });
+      g.fill({ color: 0x00CED1, alpha: 0.35 });
+
+      const cx2 = S * 0.7, cy2 = S * 0.4;
+      g.moveTo(cx2, cy2 - 8);
+      g.lineTo(cx2 + 6, cy2);
+      g.lineTo(cx2, cy2 + 8);
+      g.lineTo(cx2 - 6, cy2);
+      g.closePath();
+      g.fill({ color: 0x9B30FF, alpha: 0.2 });
+
+      g.rect(0, 0, S, S);
+      g.fill({ color: 0x00CED1, alpha: 0.05 });
     }
 
     if (tile.type === TileType.GRANITE) {
-      for (let i = 0; i < 5; i++) {
-        const sx = (i * 13 + 7) % SCALED_TILE;
-        const sy = (i * 17 + 3) % SCALED_TILE;
-        g.circle(sx, sy, 2);
-        g.fill({ color: 0xcccccc, alpha: 0.15 });
+      for (let i = 0; i < 6; i++) {
+        const sx = rng.next() * S;
+        const sy = rng.next() * S;
+        g.circle(sx, sy, 1.5 + rng.next() * 2);
+        g.fill({ color: 0xcccccc, alpha: 0.12 + rng.next() * 0.08 });
+      }
+    }
+
+    if (tile.type === TileType.OBSIDIAN) {
+      for (let i = 0; i < 3; i++) {
+        const sx = rng.next() * S;
+        const sy = rng.next() * S;
+        const ex = sx + (rng.next() - 0.5) * 20;
+        const ey = sy + (rng.next() - 0.5) * 20;
+        g.moveTo(sx, sy);
+        g.lineTo(ex, ey);
+        g.stroke({ color: 0x2a2a4a, width: 1, alpha: 0.3 });
+      }
+    }
+
+    if (tile.type === TileType.DIRT) {
+      for (let i = 0; i < 3; i++) {
+        const sx = rng.next() * S;
+        const sy = rng.next() * S;
+        g.circle(sx, sy, 1 + rng.next());
+        g.fill({ color: 0x5a3a10, alpha: 0.25 });
+      }
+    }
+
+    if (tile.type === TileType.BEDROCK) {
+      g.rect(0, 0, S, S);
+      g.fill({ color: 0x000000, alpha: 0.3 });
+      for (let i = 0; i < 4; i++) {
+        const sx = rng.next() * S;
+        const sy = rng.next() * S;
+        const ex = sx + rng.next() * 15;
+        const ey = sy + rng.next() * 15;
+        g.moveTo(sx, sy);
+        g.lineTo(ex, ey);
+        g.stroke({ color: 0x222222, width: 1.5, alpha: 0.4 });
       }
     }
   }
 
-  private drawOreOverlay(g: Graphics, ore: OreType) {
+  private drawOreOverlay(g: Graphics, ore: OreType, tx: number, ty: number) {
     const color = ORE_COLORS[ore];
-    for (let i = 0; i < 6; i++) {
-      const ox = 8 + (i * 11) % (SCALED_TILE - 16);
-      const oy = 8 + (i * 7 + 5) % (SCALED_TILE - 16);
-      g.circle(ox, oy, 3);
-      g.fill({ color, alpha: 0.7 });
+    const S = SCALED_TILE;
+    const rng = new SeededRandom(tx * 997 + ty * 1013);
+
+    const numClusters = 2 + Math.floor(rng.next() * 3);
+    for (let c = 0; c < numClusters; c++) {
+      const cx = 10 + rng.next() * (S - 20);
+      const cy = 10 + rng.next() * (S - 20);
+      const clusterSize = 2 + Math.floor(rng.next() * 3);
+
+      for (let i = 0; i < clusterSize; i++) {
+        const ox = cx + (rng.next() - 0.5) * 12;
+        const oy = cy + (rng.next() - 0.5) * 12;
+        const r = 2 + rng.next() * 3;
+        g.circle(ox, oy, r);
+        g.fill({ color, alpha: 0.7 + rng.next() * 0.3 });
+      }
     }
-    g.circle(SCALED_TILE / 2, SCALED_TILE / 2, 5);
-    g.fill({ color, alpha: 0.5 });
+
+    g.circle(S / 2, S / 2, 6);
+    g.fill({ color, alpha: 0.4 });
+
+    g.circle(S / 2 - 1, S / 2 - 1, 2);
+    g.fill({ color: 0xffffff, alpha: 0.2 });
   }
 
   updateTile(x: number, y: number, hp: number, broken: boolean) {
@@ -357,7 +463,7 @@ export class GameMap {
 
   private updateCracks(x: number, y: number, tile: TileData) {
     const ratio = tile.hp / tile.maxHp;
-    if (ratio >= 0.75) return;
+    if (ratio >= 0.85) return;
 
     let crackG = this.crackOverlays[y]?.[x];
     if (!crackG) {
@@ -369,18 +475,35 @@ export class GameMap {
     }
 
     crackG.clear();
-    const alpha = ratio < 0.25 ? 0.7 : ratio < 0.5 ? 0.5 : 0.3;
-    const lineCount = ratio < 0.25 ? 5 : ratio < 0.5 ? 3 : 1;
+    const S = SCALED_TILE;
+    const rng = new SeededRandom(x * 1234 + y * 5678);
 
-    crackG.setStrokeStyle({ width: 1, color: 0x000000, alpha });
+    const alpha = ratio < 0.2 ? 0.8 : ratio < 0.4 ? 0.6 : ratio < 0.6 ? 0.4 : 0.25;
+    const lineCount = ratio < 0.2 ? 7 : ratio < 0.4 ? 5 : ratio < 0.6 ? 3 : 1;
+
     for (let i = 0; i < lineCount; i++) {
-      const sx = (i * 17 + 5) % SCALED_TILE;
-      const sy = (i * 13 + 3) % SCALED_TILE;
-      const ex = (sx + 15 + i * 7) % SCALED_TILE;
-      const ey = (sy + 20 + i * 3) % SCALED_TILE;
+      const sx = rng.next() * S;
+      const sy = rng.next() * S;
+      const segments = 2 + Math.floor(rng.next() * 3);
       crackG.moveTo(sx, sy);
-      crackG.lineTo(ex, ey);
-      crackG.stroke();
+      let cx = sx, cy = sy;
+      for (let s = 0; s < segments; s++) {
+        cx += (rng.next() - 0.5) * 20;
+        cy += (rng.next() - 0.5) * 20;
+        cx = Math.max(0, Math.min(S, cx));
+        cy = Math.max(0, Math.min(S, cy));
+        crackG.lineTo(cx, cy);
+      }
+      crackG.stroke({ width: ratio < 0.3 ? 2 : 1, color: 0x000000, alpha });
+    }
+
+    if (ratio < 0.3) {
+      for (let i = 0; i < 3; i++) {
+        const px = rng.next() * S;
+        const py = rng.next() * S;
+        crackG.circle(px, py, 2);
+        crackG.fill({ color: 0x000000, alpha: alpha * 0.5 });
+      }
     }
   }
 
