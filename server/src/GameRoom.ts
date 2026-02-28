@@ -194,10 +194,7 @@ export class GameRoom {
   }
 
   handleDig(playerId: string, tx: number, ty: number) {
-    if (this.phase !== GamePhase.DIGGING) {
-      console.log(`[DIG] Rejected: phase=${this.phase}`);
-      return;
-    }
+    if (this.phase !== GamePhase.DIGGING) return;
     const player = this.players.get(playerId);
     if (!player) return;
 
