@@ -60,24 +60,20 @@ export class Camera {
 
     this.zoom = lerp(this.zoom, this.targetZoom, 0.1);
 
-    const cx = -this.currentX + this.screenWidth / 2 + this.shakeX;
-    const cy = -this.currentY + this.screenHeight / 2 + this.shakeY;
+    const offsetX = -this.currentX * this.zoom + this.screenWidth / 2 + this.shakeX;
+    const offsetY = -this.currentY * this.zoom + this.screenHeight / 2 + this.shakeY;
 
-    this.container.x = cx;
-    this.container.y = cy;
+    this.container.x = offsetX;
+    this.container.y = offsetY;
     this.container.scale.set(this.zoom);
-    this.container.pivot.set(
-      -cx / this.zoom + cx,
-      -cy / this.zoom + cy,
-    );
   }
 
   screenToWorld(sx: number, sy: number): { x: number; y: number } {
-    const cx = -this.currentX + this.screenWidth / 2;
-    const cy = -this.currentY + this.screenHeight / 2;
+    const offsetX = -this.currentX * this.zoom + this.screenWidth / 2;
+    const offsetY = -this.currentY * this.zoom + this.screenHeight / 2;
     return {
-      x: (sx - cx) / this.zoom,
-      y: (sy - cy) / this.zoom,
+      x: (sx - offsetX) / this.zoom,
+      y: (sy - offsetY) / this.zoom,
     };
   }
 }

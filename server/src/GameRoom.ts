@@ -210,23 +210,36 @@ export class GameRoom {
       player.lastClickTime = now;
     }
 
-    if (tx < 0 || tx >= BALANCE.MAP_WIDTH || ty < 0 || ty >= BALANCE.MAP_HEIGHT) {
-      console.log(`[DIG] Out of bounds: ${tx},${ty}`);
-      return;
-    }
+    if (tx < 0 || tx >= BALANCE.MAP_WIDTH || ty < 0 || ty >= BALANCE.MAP_HEIGHT) return;
     const tile = this.map[ty][tx];
-    if (tile.type === TileType.EMPTY || tile.type === TileType.BEDROCK) {
-      console.log(`[DIG] Tile is ${tile.type === TileType.EMPTY ? 'empty' : 'bedrock'}: ${tx},${ty}`);
+
+    if (tile.type === TileType.EMPTY) {
+      const dist = Math.abs(tx - player.state.x) + Math.abs(ty - player.state.y);
+      if (dist <= 5 && this.canReach(player.state.x, player.state.y, tx, ty)) {
+        player.state.x = tx;
+        player.state.y = ty;
+        if (player.socket?.emit) {
+          player.socket.emit('message', {
+            type: 'PLAYER_STATE',
+            payload: { x: tx, y: ty, resources: player.state.resources, upgrades: player.state.upgrades, tilesDug: player.state.tilesDug },
+          });
+        }
+      }
       return;
     }
+    if (tile.type === TileType.BEDROCK) return;
 
     const px = player.state.x, py = player.state.y;
     const dx = Math.abs(tx - px), dy = Math.abs(ty - py);
+
     if (dx > 1 || dy > 1) {
-      console.log(`[DIG] Not adjacent: player(${px},${py}) tile(${tx},${ty}) d(${dx},${dy})`);
-      return;
+      if (dx <= 2 && dy <= 2) {
+        const moved = this.moveTowardTile(player, tx, ty);
+        if (!moved) return;
+      } else {
+        return;
+      }
     }
-    console.log(`[DIG] OK: player(${px},${py}) -> tile(${tx},${ty}) type=${tile.type} hp=${tile.hp}`);
 
     let damage = getPickaxeDamage(player.state.upgrades.pickaxeLevel);
 
@@ -828,6 +841,83 @@ export class GameRoom {
         this.endEncounter(null);
       }
     }, BALANCE.ENCOUNTER.PORTAL_DURATION_MS);
+  }
+
+  private canReach(fromX: number, fromY: number, toX: number, toY: number): boolean {
+    const visited = new Set<string>();
+    const queue = [{ x: fromX, y: fromY }];
+    visited.add(`${fromX},${fromY}`);
+
+    while (queue.length > 0) {
+      const { x, y } = queue.shift()!;
+      if (x === toX && y === toY) return true;
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx, ny = y + dy;
+          const key = `${nx},${ny}`;
+          if (visited.has(key)) continue;
+          if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
+          visited.add(key);
+          if (this.map[ny][nx].type === TileType.EMPTY) {
+            queue.push({ x: nx, y: ny });
+          } else if (nx === toX && ny === toY) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private moveTowardTile(player: { state: PlayerState; socket: any }, tx: number, ty: number): boolean {
+    const px = player.state.x, py = player.state.y;
+
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = px + dx, ny = py + dy;
+        if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
+        if (this.map[ny][nx].type !== TileType.EMPTY) continue;
+        const newDist = Math.abs(tx - nx) + Math.abs(ty - ny);
+        if (newDist <= 1) {
+          player.state.x = nx;
+          player.state.y = ny;
+          if (player.socket?.emit) {
+            player.socket.emit('message', {
+              type: 'PLAYER_STATE',
+              payload: { x: nx, y: ny, resources: player.state.resources, upgrades: player.state.upgrades, tilesDug: player.state.tilesDug },
+            });
+          }
+          return true;
+        }
+      }
+    }
+
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const nx = px + dx, ny = py + dy;
+        if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
+        if (this.map[ny][nx].type === TileType.EMPTY) {
+          const oldDist = Math.abs(tx - px) + Math.abs(ty - py);
+          const newDist = Math.abs(tx - nx) + Math.abs(ty - ny);
+          if (newDist < oldDist) {
+            player.state.x = nx;
+            player.state.y = ny;
+            if (player.socket?.emit) {
+              player.socket.emit('message', {
+                type: 'PLAYER_STATE',
+                payload: { x: nx, y: ny, resources: player.state.resources, upgrades: player.state.upgrades, tilesDug: player.state.tilesDug },
+              });
+            }
+            return this.moveTowardTile(player, tx, ty);
+          }
+        }
+      }
+    }
+    return false;
   }
 
   getOtherPlayer(playerId: string): string | null {
