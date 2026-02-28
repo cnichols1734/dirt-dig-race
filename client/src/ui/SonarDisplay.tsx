@@ -1,3 +1,5 @@
+import React from 'react';
+
 export function SonarDisplay() {
-  return <div>SonarDisplay</div>;
+  return null;
 }
