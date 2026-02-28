@@ -1,0 +1,28 @@
+{
+  "name": "@dig/client",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@dig/shared": "*",
+    "pixi.js": "^8",
+    "@pixi/particle-emitter": "^5",
+    "howler": "^2",
+    "gsap": "^3",
+    "socket.io-client": "^4",
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "devDependencies": {
+    "vite": "^6",
+    "@vitejs/plugin-react": "^4",
+    "typescript": "^5",
+    "@types/react": "^19",
+    "@types/react-dom": "^19"
+  }
+}
