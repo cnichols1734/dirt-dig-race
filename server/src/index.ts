@@ -28,6 +28,7 @@ io.on('connection', (socket) => {
   db.getOrCreatePlayer(socket.id);
 
   socket.on('message', (msg) => {
+    if (msg.type === 'DIG') console.log(`[Server] DIG from ${socket.id}: ${JSON.stringify(msg.payload)}`);
     switch (msg.type) {
       case 'JOIN_QUEUE':
         matchmaker.addToQueue(socket);

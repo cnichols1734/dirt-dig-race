@@ -194,7 +194,10 @@ export class GameRoom {
   }
 
   handleDig(playerId: string, tx: number, ty: number) {
-    if (this.phase !== GamePhase.DIGGING) return;
+    if (this.phase !== GamePhase.DIGGING) {
+      console.log(`[DIG] Rejected: phase=${this.phase}`);
+      return;
+    }
     const player = this.players.get(playerId);
     if (!player) return;
 
@@ -207,13 +210,23 @@ export class GameRoom {
       player.lastClickTime = now;
     }
 
-    if (tx < 0 || tx >= BALANCE.MAP_WIDTH || ty < 0 || ty >= BALANCE.MAP_HEIGHT) return;
+    if (tx < 0 || tx >= BALANCE.MAP_WIDTH || ty < 0 || ty >= BALANCE.MAP_HEIGHT) {
+      console.log(`[DIG] Out of bounds: ${tx},${ty}`);
+      return;
+    }
     const tile = this.map[ty][tx];
-    if (tile.type === TileType.EMPTY || tile.type === TileType.BEDROCK) return;
+    if (tile.type === TileType.EMPTY || tile.type === TileType.BEDROCK) {
+      console.log(`[DIG] Tile is ${tile.type === TileType.EMPTY ? 'empty' : 'bedrock'}: ${tx},${ty}`);
+      return;
+    }
 
     const px = player.state.x, py = player.state.y;
     const dx = Math.abs(tx - px), dy = Math.abs(ty - py);
-    if (dx > 1 || dy > 1) return;
+    if (dx > 1 || dy > 1) {
+      console.log(`[DIG] Not adjacent: player(${px},${py}) tile(${tx},${ty}) d(${dx},${dy})`);
+      return;
+    }
+    console.log(`[DIG] OK: player(${px},${py}) -> tile(${tx},${ty}) type=${tile.type} hp=${tile.hp}`);
 
     let damage = getPickaxeDamage(player.state.upgrades.pickaxeLevel);
 
@@ -906,43 +919,48 @@ export class GameRoom {
       const bx = bot.state.x, by = bot.state.y;
       let dx = targetX - bx, dy = targetY - by;
 
+      if (dx === 0 && dy === 0) return;
+
       let nx = bx, ny = by;
-      if (Math.abs(dx) > Math.abs(dy)) {
+      const jitter = Math.random();
+      if (jitter < 0.15) {
+        ny += Math.random() < 0.5 ? 1 : -1;
+      } else if (Math.abs(dx) > Math.abs(dy)) {
         nx += dx > 0 ? 1 : -1;
       } else if (dy !== 0) {
         ny += dy > 0 ? 1 : -1;
-      } else if (dx !== 0) {
+      } else {
         nx += dx > 0 ? 1 : -1;
       }
 
-      if (nx >= 0 && nx < BALANCE.MAP_WIDTH && ny >= 0 && ny < BALANCE.MAP_HEIGHT) {
-        const tile = this.map[ny][nx];
-        if (tile.type !== TileType.BEDROCK) {
-          if (tile.type === TileType.EMPTY) {
-            bot.state.x = nx;
-            bot.state.y = ny;
-          } else {
-            const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
-            tile.hp -= damage;
-            if (tile.hp <= 0) {
-              tile.hp = 0;
-              if (tile.ore !== OreType.NONE) {
-                this.collectOre(bot.state, tile.ore);
-              }
-              tile.type = TileType.EMPTY;
-              tile.ore = OreType.NONE;
-              bot.state.x = nx;
-              bot.state.y = ny;
-              bot.state.tilesDug++;
-              this.checkTremor(botId!);
-              this.checkCenterReached(botId!, nx, ny);
-            }
+      if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) return;
+
+      const tile = this.map[ny][nx];
+      if (tile.type === TileType.BEDROCK) return;
+
+      if (tile.type === TileType.EMPTY) {
+        bot.state.x = nx;
+        bot.state.y = ny;
+      } else {
+        const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
+        tile.hp -= damage;
+        if (tile.hp <= 0) {
+          tile.hp = 0;
+          if (tile.ore !== OreType.NONE) {
+            this.collectOre(bot.state, tile.ore);
           }
+          tile.type = TileType.EMPTY;
+          tile.ore = OreType.NONE;
+          bot.state.x = nx;
+          bot.state.y = ny;
+          bot.state.tilesDug++;
+          this.checkTremor(botId!);
+          this.checkCenterReached(botId!, nx, ny);
         }
       }
 
       this.tryBotUpgrades(bot.state);
-    }, 120);
+    }, 500);
   }
 
   tryBotUpgrades(state: PlayerState) {

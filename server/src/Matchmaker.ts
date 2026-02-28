@@ -65,7 +65,10 @@ export class Matchmaker {
 
   handleMessage(socketId: string, msg: any) {
     const roomId = this.playerRoomMap.get(socketId);
-    if (!roomId) return;
+    if (!roomId) {
+      console.log(`[Matchmaker] No room for player ${socketId}, msg type: ${msg.type}`);
+      return;
+    }
     const room = this.rooms.get(roomId);
     if (!room) return;
     room.handleMessage(socketId, msg);

@@ -18,6 +18,7 @@ export function Lobby({ onJoinQueue }: LobbyProps) {
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       background: 'radial-gradient(ellipse at center, #0a0a2e 0%, #050510 100%)',
+      pointerEvents: 'auto' as const,
     }}>
       <div style={{
         fontSize: 80, fontWeight: 'bold', color: '#00CED1',

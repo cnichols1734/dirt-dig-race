@@ -180,7 +180,7 @@ export class GameManager {
           this.camera.currentX = p.spawnX * SCALED_TILE + SCALED_TILE / 2;
           this.camera.currentY = p.spawnY * SCALED_TILE + SCALED_TILE / 2;
 
-          this.fog.revealAround(p.spawnX, p.spawnY, 1);
+          this.revealSpawnArea(p.spawnX, p.spawnY);
           this.lighting.updateLantern(p.spawnX, p.spawnY, 1);
           this.lighting.updateOreGlows(this.gameMap.tiles, this.fog.revealed);
 
@@ -455,6 +455,34 @@ export class GameManager {
       this.sonar.update(dt);
       this.combat.update(dt);
     });
+  }
+
+  private revealSpawnArea(sx: number, sy: number) {
+    this.fog.revealAround(sx, sy, 3);
+
+    const visited = new Set<string>();
+    const queue: Array<{ x: number; y: number }> = [{ x: sx, y: sy }];
+    visited.add(`${sx},${sy}`);
+
+    while (queue.length > 0) {
+      const { x, y } = queue.shift()!;
+      this.fog.revealTile(x, y);
+
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          const nx = x + dx, ny = y + dy;
+          const key = `${nx},${ny}`;
+          if (visited.has(key)) continue;
+          if (nx < 0 || nx >= this.gameMap.width || ny < 0 || ny >= this.gameMap.height) continue;
+          visited.add(key);
+          const tile = this.gameMap.getTile(nx, ny);
+          if (tile && tile.type === TileType.EMPTY) {
+            queue.push({ x: nx, y: ny });
+          }
+        }
+      }
+    }
   }
 
   getState() {

@@ -37,17 +37,19 @@ export function HUD({
   onToggleUpgrades,
 }: HUDProps) {
   const [bounceKey, setBounceKey] = useState('');
-  const [prevResources, setPrevResources] = useState(resources);
+  const prevRef = React.useRef(resources);
 
   useEffect(() => {
+    const prev = prevRef.current;
     for (const key of Object.keys(resources) as (keyof Resources)[]) {
-      if (resources[key] > prevResources[key]) {
+      if (resources[key] > prev[key]) {
         setBounceKey(key);
         setTimeout(() => setBounceKey(''), 300);
+        break;
       }
     }
-    setPrevResources(resources);
-  }, [resources]);
+    prevRef.current = resources;
+  }, [resources.copper, resources.iron, resources.gold, resources.crystal, resources.emberStone]);
 
   const pickaxeDmg = BALANCE.UPGRADES.PICKAXE.find(p => p.level === upgrades.pickaxeLevel)?.damage || 1;
   const depthPercent = Math.min(100, tilesDug);
@@ -59,6 +61,7 @@ export function HUD({
         position: 'absolute', top: 12, left: 12, zIndex: 50,
         display: 'flex', gap: 12, background: 'rgba(10,10,26,0.85)',
         padding: '8px 14px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)',
+        pointerEvents: 'auto' as const,
       }}>
         {(Object.keys(oreLabels) as (keyof Resources)[]).map(key => (
           <div
@@ -87,6 +90,7 @@ export function HUD({
         background: 'rgba(10,10,26,0.85)',
         padding: '8px 14px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)',
         fontSize: 10, lineHeight: '18px',
+        pointerEvents: 'auto' as const,
       }}>
         <div style={{ color: '#aaa' }}>⏱ {formatTime(elapsedMs)}</div>
         <div style={{ color: '#FFB347' }}>⛏ Lv.{upgrades.pickaxeLevel} ({pickaxeDmg}dmg)</div>
@@ -99,6 +103,7 @@ export function HUD({
         position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 50,
         display: 'flex', gap: 12, background: 'rgba(10,10,26,0.85)',
         padding: '8px 16px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.1)',
+        pointerEvents: 'auto' as const,
       }}>
         <div style={{
           padding: '6px 12px', borderRadius: 4, fontSize: 10,

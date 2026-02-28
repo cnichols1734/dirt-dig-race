@@ -122,6 +122,7 @@ export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: Upgrad
         position: 'absolute', inset: 0, zIndex: 200,
         background: 'rgba(0,0,0,0.5)',
         display: 'flex', justifyContent: 'flex-end',
+        pointerEvents: 'auto' as const,
       }}
     >
       <div

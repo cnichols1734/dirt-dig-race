@@ -73,18 +73,10 @@ export function App() {
           break;
         case 'gameStart':
           setState(s => ({ ...s, phase: GamePhase.DIGGING, playerId: gm.playerId }));
-          if (timerRef.current) cancelAnimationFrame(timerRef.current);
-          const tick = () => {
-            setState(s => ({
-              ...s,
-              elapsedMs: gm.elapsedMs,
-              resources: { ...gm.player.resources },
-              upgrades: { ...gm.player.upgrades },
-              tilesDug: gm.player.tilesDug,
-            }));
-            timerRef.current = requestAnimationFrame(tick);
-          };
-          timerRef.current = requestAnimationFrame(tick);
+          if (timerRef.current) window.clearInterval(timerRef.current);
+          timerRef.current = window.setInterval(() => {
+            setState(s => ({ ...s, elapsedMs: gm.elapsedMs }));
+          }, 500);
           break;
         case 'playerState':
           setState(s => ({
@@ -151,7 +143,7 @@ export function App() {
           setState(s => ({ ...s, encounterPlayerHp: data.hp }));
           break;
         case 'gameOver':
-          if (timerRef.current) cancelAnimationFrame(timerRef.current);
+          if (timerRef.current) window.clearInterval(timerRef.current);
           setState(s => ({
             ...s,
             phase: GamePhase.GAME_OVER,
@@ -170,7 +162,7 @@ export function App() {
     gm.onEvent(handler);
     return () => {
       gm.offEvent(handler);
-      if (timerRef.current) cancelAnimationFrame(timerRef.current);
+      if (timerRef.current) window.clearInterval(timerRef.current);
     };
   }, []);
 
@@ -196,7 +188,7 @@ export function App() {
   }, []);
 
   return (
-    <div style={{ width: '100%', height: '100%', fontFamily: '"Press Start 2P", "VT323", monospace', color: '#fff' }}>
+    <div style={{ width: '100%', height: '100%', fontFamily: '"Press Start 2P", "VT323", monospace', color: '#fff', pointerEvents: 'none' }}>
       <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet" />
 
       {state.phase === GamePhase.LOBBY && (
@@ -208,6 +200,7 @@ export function App() {
           position: 'absolute', inset: 0,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           background: 'rgba(0,0,0,0.7)', zIndex: 100,
+          pointerEvents: 'auto' as const,
         }}>
           <div style={{ fontSize: 72, color: '#00CED1', textShadow: '0 0 20px #00CED1' }}>
             {state.countdownValue > 0 ? state.countdownValue : 'DIG!'}

@@ -32,6 +32,7 @@ export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
       display: 'flex', flexDirection: 'column',
       alignItems: 'center', justifyContent: 'center',
       background: 'rgba(5,5,15,0.95)',
+      pointerEvents: 'auto' as const,
     }}>
       {revealStep >= 1 && (
         <div style={{
