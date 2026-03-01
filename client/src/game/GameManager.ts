@@ -1,5 +1,5 @@
 import { Application, Container } from 'pixi.js';
-import { GamePhase, TileType, OreType, OreNode } from '@dig/shared';
+import { GamePhase, TileType, OreType, OreNode, BotDifficulty } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
 import { SCALED_TILE } from '../utils/constants';
 import { GameMap } from './Map';
@@ -537,10 +537,10 @@ export class GameManager {
     socketManager.send({ type: 'LEAVE_QUEUE', payload: {} });
   }
 
-  playBot() {
+  playBot(difficulty: BotDifficulty = BotDifficulty.MEDIUM) {
     socketManager.connect();
     setTimeout(() => {
-      socketManager.send({ type: 'PLAY_BOT' as any, payload: {} });
+      socketManager.send({ type: 'PLAY_BOT', payload: { difficulty } });
     }, 500);
   }
 

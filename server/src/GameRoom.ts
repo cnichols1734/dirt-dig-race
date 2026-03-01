@@ -1,7 +1,7 @@
 import { Server, Socket } from 'socket.io';
 import {
   TileData, TileType, OreType, PlayerState, GamePhase,
-  Resources, UpgradeState, OreNode, NodeTier,
+  Resources, UpgradeState, OreNode, NodeTier, BotDifficulty,
   ClientMessage, MatchFoundPayload, TileUpdatePayload,
   TremorPayload, SonarResultPayload, NodeUpdatePayload,
   NodeClaimedPayload, NodeContestedPayload, ScoreUpdatePayload,
@@ -60,6 +60,21 @@ function dist(x1: number, y1: number, x2: number, y2: number): number {
   return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
 }
 
+interface BotConfig {
+  TICK_MS: number;
+  RANDOM_MOVE_CHANCE: number;
+  WILL_STEAL: boolean;
+  WILL_ATTACK: boolean;
+  WILL_USE_SONAR: boolean;
+  WILL_USE_DYNAMITE: boolean;
+  UPGRADE_ALL: boolean;
+  PAUSE_CHANCE: number;
+  PREFERS_SOFT_TILES: boolean;
+  TARGETS_SUPERCHARGED: boolean;
+  DEFENDS_NODES: boolean;
+  DIG_MULTI_PER_TICK: number;
+}
+
 interface PlayerEntry {
   socket: Socket;
   state: PlayerState;
@@ -82,6 +97,7 @@ export class GameRoom {
   startTime: number = 0;
   gameOverSent = false;
   isBotGame = false;
+  botDifficulty: BotDifficulty = BotDifficulty.MEDIUM;
 
   private scoreInterval: ReturnType<typeof setInterval> | null = null;
   private veinRushTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -127,8 +143,9 @@ export class GameRoom {
     return idx;
   }
 
-  addBot() {
+  addBot(difficulty: BotDifficulty = BotDifficulty.MEDIUM) {
     this.isBotGame = true;
+    this.botDifficulty = difficulty;
     const spawns = getSpawnPositions(BALANCE.MAP_HEIGHT, BALANCE.MAP_WIDTH);
     const spawn = spawns.p2;
     const botId = 'bot-' + Math.random().toString(36).slice(2, 8);
@@ -161,8 +178,10 @@ export class GameRoom {
 
     playerEntries.forEach(([id, p], idx) => {
       if (!p.socket?.emit) return;
-      const otherName = playerEntries.length > 1 && playerEntries[idx === 0 ? 1 : 0]?.[1]?.socket?.emit
-        ? 'Rival Miner' : 'Bot Miner';
+      const isOtherBot = playerEntries.length > 1 && !playerEntries[idx === 0 ? 1 : 0]?.[1]?.socket?.emit;
+      const diffLabel = this.botDifficulty === BotDifficulty.EASY ? 'Easy'
+        : this.botDifficulty === BotDifficulty.HARD ? 'Hard' : 'Medium';
+      const otherName = isOtherBot ? `Bot (${diffLabel})` : 'Rival Miner';
 
       const payload: MatchFoundPayload = {
         roomId: this.id, mapSeed: this.mapSeed,
@@ -1001,6 +1020,14 @@ export class GameRoom {
 
   // --- BOT AI ---
 
+  private getBotConfig(): BotConfig {
+    switch (this.botDifficulty) {
+      case BotDifficulty.EASY: return BALANCE.BOT.EASY;
+      case BotDifficulty.HARD: return BALANCE.BOT.HARD;
+      default: return BALANCE.BOT.MEDIUM;
+    }
+  }
+
   private startBot() {
     let botId: string | null = null;
     for (const [id, p] of this.players) {
@@ -1009,7 +1036,11 @@ export class GameRoom {
     if (!botId) return;
 
     const bot = this.players.get(botId)!;
+    const cfg = this.getBotConfig();
     let currentTarget: OreNode | null = null;
+    let pathCache: Array<{ x: number; y: number }> = [];
+    let pathTargetKey = '';
+    let lastRetargetTime = 0;
 
     this.botTimer = setInterval(() => {
       if (this.phase !== GamePhase.DIGGING) {
@@ -1017,91 +1048,304 @@ export class GameRoom {
         return;
       }
       if (bot.state.knockedOut) return;
+      if (Math.random() < cfg.PAUSE_CHANCE) return;
 
-      if (!currentTarget || currentTarget.ownerId === botId) {
-        currentTarget = this.pickBotTarget(botId!);
+      this.tryBotUpgrades(bot.state, cfg.UPGRADE_ALL);
+
+      const bx = bot.state.x, by = bot.state.y;
+      const now = Date.now();
+
+      if (cfg.WILL_ATTACK) {
+        this.botTryAttack(botId!, bx, by);
+      }
+
+      if (cfg.WILL_USE_DYNAMITE) {
+        this.botTryDynamite(botId!, bx, by);
+      }
+
+      const retargetInterval = this.botDifficulty === BotDifficulty.HARD ? 3000 : 5000;
+      if (!currentTarget || currentTarget.ownerId === botId || now - lastRetargetTime > retargetInterval) {
+        const newTarget = this.pickBotTarget(botId!, cfg);
+        if (newTarget && newTarget.id !== currentTarget?.id) {
+          currentTarget = newTarget;
+          pathCache = [];
+          pathTargetKey = '';
+        }
+        lastRetargetTime = now;
       }
       if (!currentTarget) return;
 
-      const bx = bot.state.x, by = bot.state.y;
       const d = dist(bx, by, currentTarget.x, currentTarget.y);
 
-      if (d <= 2) {
+      if (d <= BALANCE.NODES.CAPTURE_RANGE) {
         if (currentTarget.ownerId !== botId) {
-          this.handleClaimNode(botId!, currentTarget.id);
+          for (let i = 0; i < cfg.DIG_MULTI_PER_TICK; i++) {
+            this.handleClaimNode(botId!, currentTarget.id);
+          }
         }
         return;
       }
 
-      const dx = currentTarget.x - bx;
-      const dy = currentTarget.y - by;
+      const targetKey = `${currentTarget.x},${currentTarget.y}`;
+      if (cfg.PREFERS_SOFT_TILES && (pathCache.length === 0 || pathTargetKey !== targetKey)) {
+        pathCache = this.botFindPath(bx, by, currentTarget.x, currentTarget.y);
+        pathTargetKey = targetKey;
+      }
+
       let nx = bx, ny = by;
 
-      if (Math.random() < 0.15) {
-        ny += Math.random() < 0.5 ? 1 : -1;
-      } else if (Math.abs(dx) > Math.abs(dy)) {
-        nx += dx > 0 ? 1 : -1;
-      } else if (dy !== 0) {
-        ny += dy > 0 ? 1 : -1;
+      if (Math.random() < cfg.RANDOM_MOVE_CHANCE) {
+        const dirs = [[0, -1], [0, 1], [-1, 0], [1, 0]];
+        const pick = dirs[Math.floor(Math.random() * dirs.length)];
+        nx = bx + pick[0];
+        ny = by + pick[1];
+      } else if (cfg.PREFERS_SOFT_TILES && pathCache.length > 0) {
+        const next = pathCache[0];
+        if (next.x === bx && next.y === by) {
+          pathCache.shift();
+          if (pathCache.length > 0) {
+            nx = pathCache[0].x;
+            ny = pathCache[0].y;
+          }
+        } else {
+          nx = next.x;
+          ny = next.y;
+        }
       } else {
-        nx += dx > 0 ? 1 : -1;
+        const dx = currentTarget.x - bx;
+        const dy = currentTarget.y - by;
+        if (Math.abs(dx) > Math.abs(dy)) {
+          nx += dx > 0 ? 1 : -1;
+        } else if (dy !== 0) {
+          ny += dy > 0 ? 1 : -1;
+        } else {
+          nx += dx > 0 ? 1 : -1;
+        }
       }
 
       if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) return;
 
       const tile = this.map[ny][nx];
-      if (tile.type === TileType.BEDROCK) return;
-
-      if (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR) {
-        bot.state.x = nx;
-        bot.state.y = ny;
-      } else {
-        const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
-        tile.hp -= damage;
-        const broken = tile.hp <= 0;
-        if (broken) {
-          tile.hp = 0;
-          if (tile.ore !== OreType.NONE) this.collectOre(bot.state, tile.ore);
-          tile.type = TileType.EMPTY;
-          tile.ore = OreType.NONE;
-          bot.state.x = nx;
-          bot.state.y = ny;
-          bot.state.tilesDug++;
-          this.checkTremor(botId!);
+      if (tile.type === TileType.BEDROCK) {
+        if (cfg.PREFERS_SOFT_TILES) {
+          pathCache = [];
+          pathTargetKey = '';
         }
-        for (const [id, p] of this.players) {
-          if (!p.socket?.emit) continue;
-          p.socket.emit('message', {
-            type: 'OPPONENT_TILE_UPDATE',
-            payload: { x: nx, y: ny, hp: tile.hp, broken, damageDealt: damage },
-          });
-        }
+        return;
       }
 
-      this.tryBotUpgrades(bot.state);
-    }, 400);
+      for (let i = 0; i < cfg.DIG_MULTI_PER_TICK; i++) {
+        this.botDigOrMove(botId!, bot, nx, ny);
+        if (bot.state.x === nx && bot.state.y === ny) break;
+      }
+
+      this.tryBotUpgrades(bot.state, cfg.UPGRADE_ALL);
+    }, cfg.TICK_MS);
   }
 
-  private pickBotTarget(botId: string): OreNode | null {
+  private botDigOrMove(botId: string, bot: PlayerEntry, nx: number, ny: number) {
+    const tile = this.map[ny][nx];
+    if (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR) {
+      bot.state.x = nx;
+      bot.state.y = ny;
+      this.checkNodeDiscovery(botId, nx, ny);
+    } else if (tile.type !== TileType.BEDROCK) {
+      const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
+      tile.hp -= damage;
+      const broken = tile.hp <= 0;
+      if (broken) {
+        tile.hp = 0;
+        if (tile.ore !== OreType.NONE) this.collectOre(bot.state, tile.ore);
+        tile.type = TileType.EMPTY;
+        tile.ore = OreType.NONE;
+        bot.state.x = nx;
+        bot.state.y = ny;
+        bot.state.tilesDug++;
+        this.checkTremor(botId);
+        this.checkNodeDiscovery(botId, nx, ny);
+      }
+      for (const [id, p] of this.players) {
+        if (!p.socket?.emit) continue;
+        p.socket.emit('message', {
+          type: 'OPPONENT_TILE_UPDATE',
+          payload: { x: nx, y: ny, hp: tile.hp, broken, damageDealt: damage },
+        });
+      }
+    }
+  }
+
+  private botTryAttack(botId: string, bx: number, by: number) {
+    for (const [id, target] of this.players) {
+      if (id === botId) continue;
+      if (target.state.knockedOut) continue;
+      const d = dist(bx, by, target.state.x, target.state.y);
+      if (d <= BALANCE.COMBAT.ATTACK_RANGE) {
+        this.handleAttack(botId);
+        return;
+      }
+    }
+  }
+
+  private botTryDynamite(botId: string, bx: number, by: number) {
+    const bot = this.players.get(botId);
+    if (!bot) return;
+    if (!bot.state.upgrades.dynamiteUnlocked) return;
+    if (bot.state.upgrades.dynamiteCharges <= 0) return;
+
+    let hardCount = 0;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const nx = bx + dx, ny = by + dy;
+        if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
+        const t = this.map[ny][nx].type;
+        if (t === TileType.HARD_ROCK || t === TileType.GRANITE || t === TileType.OBSIDIAN) {
+          hardCount++;
+        }
+      }
+    }
+    if (hardCount >= 3) {
+      this.handleDynamite(botId, bx, by);
+    }
+  }
+
+  private pickBotTarget(botId: string, cfg: BotConfig): OreNode | null {
     const bot = this.players.get(botId);
     if (!bot) return null;
+    const bx = bot.state.x, by = bot.state.y;
+
+    if (cfg.DEFENDS_NODES) {
+      for (const node of this.nodes) {
+        if (node.ownerId === botId && node.claimProgress < node.claimMax * 0.5) {
+          return node;
+        }
+      }
+    }
+
+    if (cfg.TARGETS_SUPERCHARGED) {
+      const supercharged = this.nodes.filter(n => n.supercharged && n.ownerId !== botId);
+      if (supercharged.length > 0) {
+        supercharged.sort((a, b) =>
+          dist(bx, by, a.x, a.y) - dist(bx, by, b.x, b.y)
+        );
+        return supercharged[0];
+      }
+    }
 
     const unowned = this.nodes.filter(n => n.ownerId === null);
     if (unowned.length > 0) {
-      unowned.sort((a, b) => dist(bot.state.x, bot.state.y, a.x, a.y) - dist(bot.state.x, bot.state.y, b.x, b.y));
+      if (this.botDifficulty === BotDifficulty.HARD) {
+        unowned.sort((a, b) => {
+          const scoreA = a.pointsPerSecond / (dist(bx, by, a.x, a.y) + 1);
+          const scoreB = b.pointsPerSecond / (dist(bx, by, b.x, b.y) + 1);
+          return scoreB - scoreA;
+        });
+      } else {
+        unowned.sort((a, b) =>
+          dist(bx, by, a.x, a.y) - dist(bx, by, b.x, b.y)
+        );
+      }
       return unowned[0];
     }
 
-    const stealable = this.nodes.filter(n => n.ownerId !== null && n.ownerId !== botId);
-    if (stealable.length > 0) {
-      stealable.sort((a, b) => b.pointsPerSecond - a.pointsPerSecond);
-      return stealable[0];
+    if (cfg.WILL_STEAL) {
+      const stealable = this.nodes.filter(n => n.ownerId !== null && n.ownerId !== botId);
+      if (stealable.length > 0) {
+        if (this.botDifficulty === BotDifficulty.HARD) {
+          stealable.sort((a, b) => {
+            const scoreA = a.pointsPerSecond / (dist(bx, by, a.x, a.y) + 1);
+            const scoreB = b.pointsPerSecond / (dist(bx, by, b.x, b.y) + 1);
+            return scoreB - scoreA;
+          });
+        } else {
+          stealable.sort((a, b) => b.pointsPerSecond - a.pointsPerSecond);
+        }
+        return stealable[0];
+      }
     }
 
     return null;
   }
 
-  private tryBotUpgrades(state: PlayerState) {
+  private botFindPath(
+    fromX: number, fromY: number, toX: number, toY: number,
+  ): Array<{ x: number; y: number }> {
+    const w = BALANCE.MAP_WIDTH, h = BALANCE.MAP_HEIGHT;
+    const maxSearch = 600;
+    let searched = 0;
+
+    const tileWeight = (t: TileType): number => {
+      switch (t) {
+        case TileType.EMPTY:
+        case TileType.NODE_FLOOR: return 0;
+        case TileType.DIRT: return 1;
+        case TileType.CLAY: return 2;
+        case TileType.STONE: return 5;
+        case TileType.HARD_ROCK: return 12;
+        case TileType.GRANITE: return 20;
+        case TileType.OBSIDIAN: return 30;
+        case TileType.CRYSTAL_WALL: return 15;
+        case TileType.BEDROCK: return 99999;
+        default: return 10;
+      }
+    };
+
+    const cameFrom = new Map<string, string>();
+    const gScore = new Map<string, number>();
+    const fScore = new Map<string, number>();
+
+    const key = (x: number, y: number) => `${x},${y}`;
+    const startKey = key(fromX, fromY);
+    gScore.set(startKey, 0);
+    fScore.set(startKey, Math.abs(toX - fromX) + Math.abs(toY - fromY));
+
+    const openSet: Array<{ x: number; y: number; f: number }> = [
+      { x: fromX, y: fromY, f: fScore.get(startKey)! },
+    ];
+
+    while (openSet.length > 0 && searched < maxSearch) {
+      searched++;
+      openSet.sort((a, b) => a.f - b.f);
+      const current = openSet.shift()!;
+      const ck = key(current.x, current.y);
+
+      if (dist(current.x, current.y, toX, toY) <= 2) {
+        const path: Array<{ x: number; y: number }> = [];
+        let k = ck;
+        while (cameFrom.has(k)) {
+          const [px, py] = k.split(',').map(Number);
+          path.unshift({ x: px, y: py });
+          k = cameFrom.get(k)!;
+        }
+        return path;
+      }
+
+      for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0]]) {
+        const nx = current.x + dx, ny = current.y + dy;
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        const nk = key(nx, ny);
+        const tile = this.map[ny][nx];
+        if (tile.type === TileType.BEDROCK) continue;
+
+        const weight = tileWeight(tile.type);
+        const tentG = (gScore.get(ck) ?? Infinity) + 1 + weight;
+
+        if (tentG < (gScore.get(nk) ?? Infinity)) {
+          cameFrom.set(nk, ck);
+          gScore.set(nk, tentG);
+          const h = Math.abs(toX - nx) + Math.abs(toY - ny);
+          const f = tentG + h;
+          fScore.set(nk, f);
+          if (!openSet.find(o => o.x === nx && o.y === ny)) {
+            openSet.push({ x: nx, y: ny, f });
+          }
+        }
+      }
+    }
+
+    return [];
+  }
+
+  private tryBotUpgrades(state: PlayerState, upgradeAll: boolean) {
     const u = state.upgrades;
     const r = state.resources;
 
@@ -1115,6 +1359,33 @@ export class GameRoom {
     if (lanternNext && canAfford(r, lanternNext.cost as any)) {
       deductCost(r, lanternNext.cost as any);
       u.lanternLevel = lanternNext.level;
+    }
+
+    if (!upgradeAll) return;
+
+    if (!u.dynamiteUnlocked && canAfford(r, BALANCE.UPGRADES.DYNAMITE.unlockCost as any)) {
+      deductCost(r, BALANCE.UPGRADES.DYNAMITE.unlockCost as any);
+      u.dynamiteUnlocked = true;
+      u.dynamiteCharges = 1;
+    }
+
+    if (u.dynamiteUnlocked && u.dynamiteCharges < BALANCE.MAX_DYNAMITE_CHARGES &&
+        canAfford(r, BALANCE.UPGRADES.DYNAMITE.chargeCost as any)) {
+      deductCost(r, BALANCE.UPGRADES.DYNAMITE.chargeCost as any);
+      u.dynamiteCharges++;
+    }
+
+    const nextBoots = u.steelBootsLevel + 1;
+    const boots = BALANCE.UPGRADES.STEEL_BOOTS[nextBoots];
+    if (boots && canAfford(r, boots.cost as any)) {
+      deductCost(r, boots.cost as any);
+      u.steelBootsLevel = nextBoots;
+    }
+
+    const momentumNext = BALANCE.UPGRADES.MOMENTUM[u.momentumLevel + 1];
+    if (momentumNext && canAfford(r, momentumNext.cost as any)) {
+      deductCost(r, momentumNext.cost as any);
+      u.momentumLevel++;
     }
   }
 

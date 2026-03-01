@@ -36,7 +36,7 @@ io.on('connection', (socket) => {
         matchmaker.removeFromQueue(socket.id);
         break;
       case 'PLAY_BOT':
-        matchmaker.startBotMatch(socket);
+        matchmaker.startBotMatch(socket, msg.payload?.difficulty || 'medium');
         break;
       default:
         matchmaker.handleMessage(socket.id, msg);
