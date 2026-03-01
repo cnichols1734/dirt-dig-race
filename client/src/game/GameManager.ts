@@ -468,6 +468,7 @@ export class GameManager {
           const wx = op.x * SCALED_TILE + SCALED_TILE / 2;
           const wy = op.y * SCALED_TILE + SCALED_TILE / 2;
           this.combat.showOpponent(wx, wy, op.hp || 50, op.maxHp || 50);
+          this.emit('opponentPosition', op);
           break;
         }
 

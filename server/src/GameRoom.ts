@@ -500,12 +500,37 @@ export class GameRoom {
       };
       this.broadcast({ type: 'SCORE_UPDATE', payload });
 
+      this.broadcastOpponentPositions();
       this.checkWinCondition();
 
       if (elapsed >= BALANCE.EVENTS.CAVE_IN_START_MS && !this.caveInInterval) {
         this.startCaveIn();
       }
     }, 1000);
+  }
+
+  private broadcastOpponentPositions() {
+    const entries = Array.from(this.players.entries());
+    for (let i = 0; i < entries.length; i++) {
+      const [id, player] = entries[i];
+      if (!player.socket?.emit) continue;
+
+      for (let j = 0; j < entries.length; j++) {
+        if (i === j) continue;
+        const [, opponent] = entries[j];
+        if (opponent.state.knockedOut) continue;
+
+        player.socket.emit('message', {
+          type: 'OPPONENT_POSITION',
+          payload: {
+            x: opponent.state.x,
+            y: opponent.state.y,
+            hp: opponent.state.hp,
+            maxHp: opponent.state.maxHp,
+          },
+        });
+      }
+    }
   }
 
   private checkWinCondition() {
@@ -614,6 +639,7 @@ export class GameRoom {
         const edgeDist = Math.min(node.x, node.y, w - 1 - node.x, h - 1 - node.y);
         if (edgeDist < r && node.ownerId !== null) {
           destroyedNodes.push(node.id);
+          this.broadcast({ type: 'NODE_LOST', payload: { nodeId: node.id, previousOwnerId: node.ownerId } });
           node.ownerId = null;
           node.claimProgress = 0;
         }
@@ -626,7 +652,52 @@ export class GameRoom {
         };
         this.broadcast({ type: 'CAVE_IN', payload });
       }
+
+      this.relocateTrappedPlayers(r);
     }, 1000 / BALANCE.EVENTS.CAVE_IN_SPEED_TILES_PER_SEC);
+  }
+
+  private relocateTrappedPlayers(caveInRadius: number) {
+    const w = BALANCE.MAP_WIDTH, h = BALANCE.MAP_HEIGHT;
+    const cx = Math.floor(w / 2), cy = Math.floor(h / 2);
+
+    for (const [id, player] of this.players) {
+      const px = player.state.x, py = player.state.y;
+      const edgeDist = Math.min(px, py, w - 1 - px, h - 1 - py);
+      if (edgeDist >= caveInRadius) continue;
+
+      const safe = this.findNearestSafeTile(px, py, cx, cy);
+      if (safe) {
+        player.state.x = safe.x;
+        player.state.y = safe.y;
+        this.sendPlayerState(player);
+      }
+    }
+  }
+
+  private findNearestSafeTile(fromX: number, fromY: number, _cx: number, _cy: number): { x: number; y: number } | null {
+    const w = BALANCE.MAP_WIDTH, h = BALANCE.MAP_HEIGHT;
+    const visited = new Set<string>();
+    const queue: Array<{ x: number; y: number }> = [{ x: fromX, y: fromY }];
+    visited.add(`${fromX},${fromY}`);
+
+    while (queue.length > 0) {
+      const { x, y } = queue.shift()!;
+      const tile = this.map[y]?.[x];
+      if (tile && (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR)) {
+        return { x, y };
+      }
+
+      for (const [dx, dy] of [[0, -1], [0, 1], [-1, 0], [1, 0], [-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const nx = x + dx, ny = y + dy;
+        const key = `${nx},${ny}`;
+        if (visited.has(key)) continue;
+        if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
+        visited.add(key);
+        queue.push({ x: nx, y: ny });
+      }
+    }
+    return null;
   }
 
   // --- SONAR ---

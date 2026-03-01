@@ -16,6 +16,8 @@ interface HUDProps {
   playerHp: number;
   playerMaxHp: number;
   dugTiles: Set<string>;
+  opponentPos?: { x: number; y: number } | null;
+  opponentRevealed?: boolean;
   onToggleUpgrades: () => void;
   onUseSonar?: () => void;
   onUseDynamite?: () => void;
@@ -33,7 +35,8 @@ const oreLabels: Record<string, string> = {
 export function HUD({
   resources, upgrades, tilesDug, scores, pps,
   timeRemainingMs, playerId, nodes, playerHp, playerMaxHp,
-  dugTiles, onToggleUpgrades, onUseSonar, onUseDynamite, onAttack,
+  dugTiles, opponentPos, opponentRevealed,
+  onToggleUpgrades, onUseSonar, onUseDynamite, onAttack,
 }: HUDProps) {
   const mobile = useIsMobile();
   const playerIds = Object.keys(scores);
@@ -158,53 +161,16 @@ export function HUD({
         />
       )}
 
-      {/* Mini-map - Bottom Right (hidden on very small screens) */}
-      {!mobile && (
-        <div style={{
-          position: 'absolute', bottom: 12, right: 12, zIndex: 50,
-          background: 'rgba(10,10,26,0.85)', borderRadius: 8, padding: 8,
-          border: '1px solid rgba(255,255,255,0.08)',
-        }}>
-          <div style={{ fontSize: 7, color: '#666', marginBottom: 4, textAlign: 'center' }}>
-            NODES {myNodes} claimed
-          </div>
-          <div style={{ position: 'relative', width: 120, height: 80 }}>
-            <canvas
-              ref={(el) => {
-                if (!el) return;
-                const ctx = el.getContext('2d');
-                if (!ctx) return;
-                ctx.clearRect(0, 0, 120, 80);
-                ctx.fillStyle = '#0a0a14';
-                ctx.fillRect(0, 0, 120, 80);
-                ctx.fillStyle = 'rgba(100,100,120,0.4)';
-                for (const key of dugTiles) {
-                  const [xs, ys] = key.split(',');
-                  const px = (parseInt(xs) / BALANCE.MAP_WIDTH) * 120;
-                  const py = (parseInt(ys) / BALANCE.MAP_HEIGHT) * 80;
-                  ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2);
-                }
-                for (const node of nodes) {
-                  if (node.ownerId !== playerId) continue;
-                  const nx = (node.x / BALANCE.MAP_WIDTH) * 120;
-                  const ny = (node.y / BALANCE.MAP_HEIGHT) * 80;
-                  const size = node.tier === NodeTier.CORE ? 5 : node.tier === NodeTier.MID ? 4 : 3;
-                  ctx.fillStyle = '#4488FF';
-                  ctx.shadowColor = '#4488FF';
-                  ctx.shadowBlur = 4;
-                  ctx.beginPath();
-                  ctx.arc(nx, ny, size, 0, Math.PI * 2);
-                  ctx.fill();
-                  ctx.shadowBlur = 0;
-                }
-              }}
-              width={120}
-              height={80}
-              style={{ borderRadius: 4, border: '1px solid rgba(255,255,255,0.05)' }}
-            />
-          </div>
-        </div>
-      )}
+      {/* Mini-map - Bottom Right */}
+      <Minimap
+        mobile={mobile}
+        dugTiles={dugTiles}
+        nodes={nodes}
+        playerId={playerId}
+        myNodes={myNodes}
+        opponentPos={opponentPos}
+        opponentRevealed={opponentRevealed}
+      />
 
       <style>{`
         @keyframes blink {
@@ -366,6 +332,105 @@ function DesktopActionBar({
       }}>
         [F] Attack
       </button>
+    </div>
+  );
+}
+
+function Minimap({
+  mobile, dugTiles, nodes, playerId, myNodes, opponentPos, opponentRevealed,
+}: {
+  mobile: boolean;
+  dugTiles: Set<string>;
+  nodes: OreNode[];
+  playerId: string;
+  myNodes: number;
+  opponentPos?: { x: number; y: number } | null;
+  opponentRevealed?: boolean;
+}) {
+  const w = mobile ? 90 : 120;
+  const h = mobile ? 60 : 80;
+
+  return (
+    <div style={{
+      position: 'absolute',
+      bottom: mobile ? 'calc(max(env(safe-area-inset-bottom, 8px), 12px) + 76px)' : 12,
+      right: mobile ? 8 : 12,
+      zIndex: 50,
+      background: 'rgba(10,10,26,0.85)', borderRadius: mobile ? 10 : 8,
+      padding: mobile ? 6 : 8,
+      border: '1px solid rgba(255,255,255,0.08)',
+    }}>
+      {!mobile && (
+        <div style={{ fontSize: 7, color: '#666', marginBottom: 4, textAlign: 'center' }}>
+          NODES {myNodes} claimed
+        </div>
+      )}
+      <div style={{ position: 'relative', width: w, height: h }}>
+        <canvas
+          ref={(el) => {
+            if (!el) return;
+            const ctx = el.getContext('2d');
+            if (!ctx) return;
+            ctx.clearRect(0, 0, w, h);
+            ctx.fillStyle = '#0a0a14';
+            ctx.fillRect(0, 0, w, h);
+
+            ctx.fillStyle = 'rgba(100,100,120,0.4)';
+            for (const key of dugTiles) {
+              const [xs, ys] = key.split(',');
+              const px = (parseInt(xs) / BALANCE.MAP_WIDTH) * w;
+              const py = (parseInt(ys) / BALANCE.MAP_HEIGHT) * h;
+              ctx.fillRect(Math.floor(px), Math.floor(py), mobile ? 1 : 2, mobile ? 1 : 2);
+            }
+
+            for (const node of nodes) {
+              if (node.ownerId !== playerId) continue;
+              const nx = (node.x / BALANCE.MAP_WIDTH) * w;
+              const ny = (node.y / BALANCE.MAP_HEIGHT) * h;
+              const size = node.tier === NodeTier.CORE ? 4 : node.tier === NodeTier.MID ? 3 : 2;
+              ctx.fillStyle = '#4488FF';
+              ctx.shadowColor = '#4488FF';
+              ctx.shadowBlur = 4;
+              ctx.beginPath();
+              ctx.arc(nx, ny, size, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.shadowBlur = 0;
+            }
+
+            if (opponentPos) {
+              const ox = (opponentPos.x / BALANCE.MAP_WIDTH) * w;
+              const oy = (opponentPos.y / BALANCE.MAP_HEIGHT) * h;
+
+              if (opponentRevealed) {
+                const blink = Math.sin(Date.now() * 0.008) > 0;
+                ctx.fillStyle = blink ? '#FF4444' : '#FF8888';
+                ctx.shadowColor = '#FF4444';
+                ctx.shadowBlur = 8;
+                ctx.beginPath();
+                ctx.arc(ox, oy, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.strokeStyle = '#FF4444';
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(ox, oy, 9, 0, Math.PI * 2);
+                ctx.stroke();
+              } else {
+                ctx.fillStyle = 'rgba(255,68,68,0.7)';
+                ctx.shadowColor = '#FF4444';
+                ctx.shadowBlur = 4;
+                ctx.beginPath();
+                ctx.arc(ox, oy, 3, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+              }
+            }
+          }}
+          width={w}
+          height={h}
+          style={{ borderRadius: 4, border: '1px solid rgba(255,255,255,0.05)' }}
+        />
+      </div>
     </div>
   );
 }

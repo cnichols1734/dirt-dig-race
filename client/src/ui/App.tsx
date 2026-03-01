@@ -30,6 +30,8 @@ interface GameUIState {
   playerHp: number;
   playerMaxHp: number;
   dugTiles: Set<string>;
+  opponentPos: { x: number; y: number } | null;
+  opponentRevealedUntil: number;
 }
 
 let gameManagerInstance: GameManager | null = null;
@@ -65,6 +67,8 @@ export function App() {
     playerHp: 50,
     playerMaxHp: 50,
     dugTiles: new Set<string>(),
+    opponentPos: null,
+    opponentRevealedUntil: 0,
   });
 
   const timerRef = useRef<number | null>(null);
@@ -150,15 +154,28 @@ export function App() {
           break;
         }
         case 'tremorSurge': {
+          const opponents = data.players?.filter((p: any) => p.id !== gm.playerId) || [];
+          const opPos = opponents.length > 0 ? { x: opponents[0].x, y: opponents[0].y } : null;
           setState(s => ({
             ...s,
             nodeAlerts: [...s.nodeAlerts, 'TREMOR SURGE! All positions revealed!'].slice(-2),
+            opponentPos: opPos ?? s.opponentPos,
+            opponentRevealedUntil: Date.now() + 5000,
           }));
           setTimeout(() => {
             setState(s => ({ ...s, nodeAlerts: s.nodeAlerts.slice(1) }));
           }, 3000);
+          setTimeout(() => {
+            setState(s => ({ ...s, opponentRevealedUntil: 0 }));
+          }, 5000);
           break;
         }
+        case 'opponentPosition':
+          setState(s => ({
+            ...s,
+            opponentPos: { x: data.x, y: data.y },
+          }));
+          break;
         case 'playerHit':
           setState(s => ({
             ...s,
@@ -300,6 +317,8 @@ export function App() {
             playerHp={state.playerHp}
             playerMaxHp={state.playerMaxHp}
             dugTiles={state.dugTiles}
+            opponentPos={state.opponentPos}
+            opponentRevealed={Date.now() < state.opponentRevealedUntil}
             onToggleUpgrades={() => setState(s => ({ ...s, showUpgrades: !s.showUpgrades }))}
             onUseSonar={handleUseSonar}
             onUseDynamite={handleUseDynamite}
