@@ -223,6 +223,10 @@ export function App() {
     gameManagerInstance?.joinQueue();
   }, []);
 
+  const handlePlayBot = useCallback(() => {
+    gameManagerInstance?.playBot();
+  }, []);
+
   const handlePurchaseUpgrade = useCallback((id: string) => {
     gameManagerInstance?.purchaseUpgrade(id);
   }, []);
@@ -240,7 +244,7 @@ export function App() {
       <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet" />
 
       {state.phase === GamePhase.LOBBY && (
-        <Lobby onJoinQueue={handleJoinQueue} />
+        <Lobby onJoinQueue={handleJoinQueue} onPlayBot={handlePlayBot} />
       )}
 
       {state.phase === GamePhase.COUNTDOWN && (

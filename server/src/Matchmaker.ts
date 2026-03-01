@@ -63,6 +63,20 @@ export class Matchmaker {
     }
   }
 
+  startBotMatch(socket: Socket) {
+    this.removeFromQueue(socket.id);
+
+    const roomId = 'room-' + Math.random().toString(36).slice(2, 10);
+    const room = new GameRoom(roomId, this.io);
+    room.addPlayer(socket, 'Player');
+    room.addBot();
+
+    this.rooms.set(roomId, room);
+    this.playerRoomMap.set(socket.id, roomId);
+
+    room.start();
+  }
+
   handleMessage(socketId: string, msg: any) {
     const roomId = this.playerRoomMap.get(socketId);
     if (!roomId) return;

@@ -117,8 +117,13 @@ export class GameManager {
 
       const node = this.gameMap.getNodeAtTile(tilePos.x, tilePos.y, this.nodes);
       if (node) {
-        socketManager.send({ type: 'CLAIM_NODE', payload: { nodeId: node.id } });
-        return;
+        const dx = this.player.x - node.x;
+        const dy = this.player.y - node.y;
+        const playerDist = Math.sqrt(dx * dx + dy * dy);
+        if (playerDist <= BALANCE.NODES.CAPTURE_RANGE) {
+          socketManager.send({ type: 'CLAIM_NODE', payload: { nodeId: node.id } });
+          return;
+        }
       }
 
       socketManager.send({ type: 'DIG', payload: { tileX: tilePos.x, tileY: tilePos.y } });
@@ -501,6 +506,13 @@ export class GameManager {
 
   leaveQueue() {
     socketManager.send({ type: 'LEAVE_QUEUE', payload: {} });
+  }
+
+  playBot() {
+    socketManager.connect();
+    setTimeout(() => {
+      socketManager.send({ type: 'PLAY_BOT' as any, payload: {} });
+    }, 500);
   }
 
   purchaseUpgrade(upgradeId: string) {

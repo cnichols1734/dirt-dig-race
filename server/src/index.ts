@@ -35,6 +35,9 @@ io.on('connection', (socket) => {
       case 'LEAVE_QUEUE':
         matchmaker.removeFromQueue(socket.id);
         break;
+      case 'PLAY_BOT':
+        matchmaker.startBotMatch(socket);
+        break;
       default:
         matchmaker.handleMessage(socket.id, msg);
         break;

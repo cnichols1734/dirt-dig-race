@@ -2,9 +2,10 @@ import React, { useState, useEffect } from 'react';
 
 interface LobbyProps {
   onJoinQueue: () => void;
+  onPlayBot?: () => void;
 }
 
-export function Lobby({ onJoinQueue }: LobbyProps) {
+export function Lobby({ onJoinQueue, onPlayBot }: LobbyProps) {
   const [searching, setSearching] = useState(false);
   const [showTips, setShowTips] = useState(false);
 
@@ -73,7 +74,7 @@ export function Lobby({ onJoinQueue }: LobbyProps) {
             fontSize: 9, color: '#555', marginTop: 12, textAlign: 'center',
             lineHeight: '16px',
           }}>
-            Discover ore nodes, claim them for points, and reach 500 to win!
+            Discover ore nodes, claim them for points, and reach 1000 to win!
           </div>
         </div>
       )}
@@ -115,10 +116,33 @@ export function Lobby({ onJoinQueue }: LobbyProps) {
             fontSize: 12, color: '#00CED1',
             letterSpacing: 2,
           }}>
-            Searching...
+            Searching for opponent...
           </div>
-          <div style={{ fontSize: 9, color: '#444', marginTop: 12 }}>
-            A bot will join shortly if no opponent found
+          <button
+            onClick={onPlayBot}
+            style={{
+              marginTop: 20, padding: '10px 28px',
+              background: 'linear-gradient(180deg, #FF8C42 0%, #CC5500 100%)',
+              border: 'none', borderRadius: 6,
+              color: '#1A0A00', fontSize: 11, fontWeight: 'bold',
+              fontFamily: 'inherit', cursor: 'pointer',
+              boxShadow: '0 0 20px rgba(255,140,66,0.3)',
+              letterSpacing: 2,
+              transition: 'all 0.15s',
+            }}
+            onMouseOver={e => {
+              e.currentTarget.style.transform = 'scale(1.05)';
+              e.currentTarget.style.boxShadow = '0 0 30px rgba(255,140,66,0.5)';
+            }}
+            onMouseOut={e => {
+              e.currentTarget.style.transform = 'scale(1)';
+              e.currentTarget.style.boxShadow = '0 0 20px rgba(255,140,66,0.3)';
+            }}
+          >
+            PLAY VS BOT
+          </button>
+          <div style={{ fontSize: 8, color: '#444', marginTop: 10 }}>
+            or wait for a real opponent
           </div>
         </div>
       )}
