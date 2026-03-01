@@ -6,7 +6,7 @@ import { UpgradeTree } from './UpgradeTree';
 import { ScoreScreen } from './ScoreScreen';
 import { TremorAlert } from './TremorAlert';
 import { SonarDisplay } from './SonarDisplay';
-import { GamePhase, Resources, UpgradeState, OreNode, GameOverPayload, TremorPayload } from '@dig/shared';
+import { GamePhase, Resources, UpgradeState, OreNode, GameOverPayload, TremorPayload, BotDifficulty } from '@dig/shared';
 
 interface GameUIState {
   phase: GamePhase;
@@ -240,8 +240,8 @@ export function App() {
     gameManagerInstance?.joinQueue();
   }, []);
 
-  const handlePlayBot = useCallback(() => {
-    gameManagerInstance?.playBot();
+  const handlePlayBot = useCallback((difficulty: BotDifficulty) => {
+    gameManagerInstance?.playBot(difficulty);
   }, []);
 
   const handlePurchaseUpgrade = useCallback((id: string) => {

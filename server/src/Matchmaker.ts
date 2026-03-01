@@ -1,4 +1,5 @@
 import { Server, Socket } from 'socket.io';
+import { BotDifficulty } from '@dig/shared';
 import { GameRoom } from './GameRoom.js';
 
 export class Matchmaker {
@@ -63,13 +64,13 @@ export class Matchmaker {
     }
   }
 
-  startBotMatch(socket: Socket) {
+  startBotMatch(socket: Socket, difficulty: BotDifficulty = BotDifficulty.MEDIUM) {
     this.removeFromQueue(socket.id);
 
     const roomId = 'room-' + Math.random().toString(36).slice(2, 10);
     const room = new GameRoom(roomId, this.io);
     room.addPlayer(socket, 'Player');
-    room.addBot();
+    room.addBot(difficulty);
 
     this.rooms.set(roomId, room);
     this.playerRoomMap.set(socket.id, roomId);

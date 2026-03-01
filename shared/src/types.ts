@@ -33,6 +33,12 @@ export enum GamePhase {
   GAME_OVER = 'GAME_OVER',
 }
 
+export enum BotDifficulty {
+  EASY = 'easy',
+  MEDIUM = 'medium',
+  HARD = 'hard',
+}
+
 export interface OreNode {
   id: string;
   x: number;
@@ -115,6 +121,7 @@ export interface MapConfig {
 export type ClientMessageType =
   | 'JOIN_QUEUE'
   | 'LEAVE_QUEUE'
+  | 'PLAY_BOT'
   | 'DIG'
   | 'CLAIM_NODE'
   | 'ATTACK'
@@ -131,6 +138,7 @@ export interface ClientMessage {
     nodeId?: string;
     upgradeId?: string;
     targetId?: string;
+    difficulty?: BotDifficulty;
   };
 }
 
