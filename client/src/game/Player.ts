@@ -18,6 +18,8 @@ export class Player {
   private rightLeg: Graphics;
   private shadow: Graphics;
   private headlampBeam: Graphics;
+  private hpBarBg: Graphics;
+  private hpBarFill: Graphics;
 
   x: number;
   y: number;
@@ -78,10 +80,14 @@ export class Player {
     this.helmet = new Graphics();
     this.headlamp = new Graphics();
     this.headlampBeam = new Graphics();
+    this.hpBarBg = new Graphics();
+    this.hpBarFill = new Graphics();
 
     this.buildCharacter();
     this.container.addChild(this.shadow);
     this.container.addChild(this.body);
+    this.container.addChild(this.hpBarBg);
+    this.container.addChild(this.hpBarFill);
 
     this.worldX = this.x * SCALED_TILE;
     this.worldY = this.y * SCALED_TILE;
@@ -248,11 +254,11 @@ export class Player {
   private drawHeadlamp() {
     this.headlamp.clear();
     this.headlamp.circle(0, -26, 4);
-    this.headlamp.fill(0xFFF8DC);
+    this.headlamp.fill({ color: 0xFFF8DC, alpha: 0.7 });
     this.headlamp.circle(0, -26, 3);
-    this.headlamp.fill(0xFFFFEE);
+    this.headlamp.fill({ color: 0xFFFFEE, alpha: 0.8 });
     this.headlamp.circle(0, -26, 2);
-    this.headlamp.fill(0xFFFFFF);
+    this.headlamp.fill({ color: 0xFFFFFF, alpha: 0.9 });
   }
 
   private drawHeadlampBeam() {
@@ -262,7 +268,7 @@ export class Player {
     this.headlampBeam.lineTo(12, -50);
     this.headlampBeam.lineTo(-12, -50);
     this.headlampBeam.closePath();
-    this.headlampBeam.fill({ color: 0xFFFFDD, alpha: 0.06 });
+    this.headlampBeam.fill({ color: 0xFFFFDD, alpha: 0.03 });
   }
 
   triggerDig(targetTileX: number, targetTileY: number) {
@@ -415,6 +421,25 @@ export class Player {
     } else {
       this.body.tint = 0xFFFFFF;
       this.body.alpha = this.knockoutAlpha;
+    }
+
+    const hpRatio = this.maxHp > 0 ? this.hp / this.maxHp : 1;
+    const showHpBar = hpRatio < 1 && !this.knockedOut;
+    this.hpBarBg.visible = showHpBar;
+    this.hpBarFill.visible = showHpBar;
+    if (showHpBar) {
+      const barW = 30;
+      const barH = 4;
+      const barX = SCALED_TILE / 2 - barW / 2;
+      const barY = -8;
+      this.hpBarBg.clear();
+      this.hpBarBg.roundRect(barX, barY, barW, barH, 1);
+      this.hpBarBg.fill({ color: 0x000000, alpha: 0.6 });
+      this.hpBarBg.stroke({ color: 0x333333, width: 1, alpha: 0.4 });
+      this.hpBarFill.clear();
+      const fillColor = hpRatio > 0.5 ? 0x44CC44 : hpRatio > 0.25 ? 0xCCCC44 : 0xCC4444;
+      this.hpBarFill.roundRect(barX + 1, barY + 1, (barW - 2) * hpRatio, barH - 2, 1);
+      this.hpBarFill.fill(fillColor);
     }
   }
 }

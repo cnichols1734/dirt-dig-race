@@ -612,6 +612,30 @@ export class GameMap {
     g.fill({ color: 0xFFFFFF, alpha: 0.3 });
   }
 
+  collapseTile(x: number, y: number) {
+    const tile = this.tiles[y]?.[x];
+    if (!tile) return;
+
+    tile.type = TileType.BEDROCK;
+    tile.hp = 9999;
+    tile.maxHp = 9999;
+    tile.ore = OreType.NONE;
+
+    const sprite = this.tileSprites[y]?.[x];
+    if (sprite) { this.container.removeChild(sprite); this.tileSprites[y][x] = null; }
+    const oreSprite = this.oreOverlays[y]?.[x];
+    if (oreSprite) { this.container.removeChild(oreSprite); this.oreOverlays[y][x] = null; }
+    const crackSprite = this.crackOverlays[y]?.[x];
+    if (crackSprite) { this.container.removeChild(crackSprite); this.crackOverlays[y][x] = null; }
+
+    const g = new Graphics();
+    this.drawTile(g, tile);
+    g.x = x * SCALED_TILE;
+    g.y = y * SCALED_TILE;
+    this.container.addChild(g);
+    this.tileSprites[y][x] = g;
+  }
+
   updateTile(x: number, y: number, hp: number, broken: boolean) {
     const tile = this.tiles[y][x];
     tile.hp = hp;

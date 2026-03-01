@@ -36,22 +36,20 @@ export class LightingSystem {
     for (let i = 9; i >= 0; i--) {
       const ratio = i / 9;
       const cr = r * (0.15 + ratio * 0.85);
-      const alpha = (1 - ratio) * 0.22 * flicker;
+      const centerDim = Math.min(1, ratio * 3);
+      const alpha = (1 - ratio) * 0.13 * flicker * (0.1 + 0.9 * centerDim);
       this.lanternLight.circle(cx, cy, cr);
       this.lanternLight.fill({ color: 0xFFB347, alpha });
     }
 
     this.lanternLight.circle(cx, cy - 10, r * 0.12);
-    this.lanternLight.fill({ color: 0xFFFFDD, alpha: 0.2 * flicker });
-
-    this.lanternLight.circle(cx, cy, r * 0.06);
-    this.lanternLight.fill({ color: 0xFFFFFF, alpha: 0.08 * flicker });
+    this.lanternLight.fill({ color: 0xFFFFDD, alpha: 0.03 * flicker });
 
     const beamAngle = Math.sin(this.lanternFlicker * 0.3) * 0.3;
     const bx = cx + Math.cos(beamAngle) * r * 0.6;
     const by = cy - r * 0.5;
     this.lanternLight.circle(bx, by, r * 0.2);
-    this.lanternLight.fill({ color: 0xFFFFDD, alpha: 0.04 * flicker });
+    this.lanternLight.fill({ color: 0xFFFFDD, alpha: 0.03 * flicker });
   }
 
   flashHit(wx: number, wy: number) {
