@@ -198,13 +198,39 @@ export function App() {
       {state.phase === GamePhase.COUNTDOWN && (
         <div style={{
           position: 'absolute', inset: 0,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: 'rgba(0,0,0,0.7)', zIndex: 100,
+          display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.75)', zIndex: 100,
           pointerEvents: 'auto' as const,
         }}>
-          <div style={{ fontSize: 72, color: '#00CED1', textShadow: '0 0 20px #00CED1' }}>
+          <div style={{
+            fontSize: 14, color: '#00CED188', marginBottom: 16,
+            letterSpacing: 4,
+          }}>
+            GET READY
+          </div>
+          <div style={{
+            fontSize: state.countdownValue > 0 ? 96 : 72,
+            color: state.countdownValue > 0 ? '#00CED1' : '#FFD700',
+            textShadow: state.countdownValue > 0
+              ? '0 0 30px #00CED1, 0 0 60px rgba(0,206,209,0.4)'
+              : '0 0 30px #FFD700, 0 0 60px rgba(255,215,0,0.4)',
+            fontWeight: 'bold',
+            animation: 'countPop 0.5s ease-out',
+          }}>
             {state.countdownValue > 0 ? state.countdownValue : 'DIG!'}
           </div>
+          {state.countdownValue <= 0 && (
+            <div style={{ fontSize: 10, color: '#FFD70088', marginTop: 12, letterSpacing: 2 }}>
+              Race to the center!
+            </div>
+          )}
+          <style>{`
+            @keyframes countPop {
+              from { transform: scale(1.5); opacity: 0; }
+              to { transform: scale(1); opacity: 1; }
+            }
+          `}</style>
         </div>
       )}
 
