@@ -1,6 +1,7 @@
 import React from 'react';
 import { Resources, UpgradeState } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
+import { useIsMobile } from './hooks';
 
 interface UpgradeTreeProps {
   resources: Resources;
@@ -30,7 +31,7 @@ function formatCost(cost: Record<string, number>): React.ReactNode {
   const entries = Object.entries(cost).filter(([, v]) => v > 0);
   return (
     <span style={{ display: 'inline-flex', gap: 6, flexWrap: 'wrap' }}>
-      {entries.map(([k, v], i) => (
+      {entries.map(([k, v]) => (
         <span key={k} style={{ color: oreColorMap[k] || '#888' }}>
           {v} {oreAbbrev[k] || k}
         </span>
@@ -40,6 +41,8 @@ function formatCost(cost: Record<string, number>): React.ReactNode {
 }
 
 export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: UpgradeTreeProps) {
+  const mobile = useIsMobile();
+
   const upgradeDefs = [
     {
       id: 'pickaxe', name: 'Pickaxe Power', icon: '\u26CF',
@@ -122,7 +125,9 @@ export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: Upgrad
       style={{
         position: 'absolute', inset: 0, zIndex: 200,
         background: 'rgba(0,0,0,0.55)',
-        display: 'flex', justifyContent: 'flex-end',
+        display: 'flex',
+        justifyContent: mobile ? 'center' : 'flex-end',
+        alignItems: mobile ? 'flex-end' : 'stretch',
         pointerEvents: 'auto' as const,
         animation: 'upgradeFadeIn 0.2s ease-out',
       }}
@@ -130,43 +135,65 @@ export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: Upgrad
       <div
         onClick={e => e.stopPropagation()}
         style={{
-          width: 360, height: '100%',
-          background: 'rgba(8,8,22,0.95)',
-          borderLeft: '1px solid rgba(0,206,209,0.15)',
-          padding: 20, overflowY: 'auto',
-          animation: 'upgradeSlideIn 0.25s ease-out',
+          width: mobile ? '100%' : 360,
+          height: mobile ? '85vh' : '100%',
+          maxHeight: mobile ? '85vh' : undefined,
+          background: 'rgba(8,8,22,0.97)',
+          borderLeft: mobile ? 'none' : '1px solid rgba(0,206,209,0.15)',
+          borderTop: mobile ? '1px solid rgba(0,206,209,0.15)' : 'none',
+          borderRadius: mobile ? '20px 20px 0 0' : 0,
+          padding: mobile ? '16px 16px 24px' : '20px',
+          overflowY: 'auto',
+          animation: mobile ? 'upgradeSlideUp 0.3s ease-out' : 'upgradeSlideIn 0.25s ease-out',
+          WebkitOverflowScrolling: 'touch',
         }}
       >
+        {/* Drag handle on mobile */}
+        {mobile && (
+          <div style={{
+            width: 40, height: 4, borderRadius: 2,
+            background: 'rgba(255,255,255,0.2)',
+            margin: '0 auto 12px',
+          }} />
+        )}
+
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          marginBottom: 20,
+          marginBottom: mobile ? 14 : 20,
         }}>
-          <h2 style={{ fontSize: 14, color: '#FFB347', margin: 0, letterSpacing: 2 }}>UPGRADES</h2>
+          <h2 style={{
+            fontSize: mobile ? 16 : 14, color: '#FFB347', margin: 0, letterSpacing: 2,
+          }}>UPGRADES</h2>
           <button
             onClick={onClose}
             style={{
-              background: 'rgba(255,255,255,0.05)', border: '1px solid #444', color: '#888',
-              padding: '4px 10px', cursor: 'pointer', fontSize: 9,
-              fontFamily: 'inherit', borderRadius: 4,
+              background: 'rgba(255,255,255,0.05)',
+              border: '1px solid #444', color: '#888',
+              padding: mobile ? '8px 16px' : '4px 10px',
+              cursor: 'pointer',
+              fontSize: mobile ? 11 : 9,
+              fontFamily: 'inherit', borderRadius: mobile ? 8 : 4,
+              WebkitTapHighlightColor: 'transparent',
             }}
           >
-            ESC
+            {mobile ? '✕ CLOSE' : 'ESC'}
           </button>
         </div>
 
         <div style={{
-          display: 'flex', gap: 8, marginBottom: 18, flexWrap: 'wrap',
-          padding: '8px 10px', background: 'rgba(255,255,255,0.02)',
+          display: 'flex', gap: 8, marginBottom: mobile ? 14 : 18, flexWrap: 'wrap',
+          padding: mobile ? '10px 12px' : '8px 10px',
+          background: 'rgba(255,255,255,0.02)',
           borderRadius: 6,
         }}>
           {Object.entries(resources).map(([key, val]) => (
             <span key={key} style={{
-              fontSize: 10,
+              fontSize: mobile ? 11 : 10,
               color: val > 0 ? (oreColorMap[key] || '#fff') : '#444',
               display: 'flex', alignItems: 'center', gap: 3,
             }}>
               <span style={{
-                width: 8, height: 8, borderRadius: 2,
+                width: mobile ? 10 : 8, height: mobile ? 10 : 8, borderRadius: 2,
                 background: oreColorMap[key] || '#888',
                 opacity: val > 0 ? 1 : 0.3,
                 display: 'inline-block',
@@ -185,44 +212,47 @@ export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: Upgrad
             <div
               key={upg.id}
               style={{
-                marginBottom: 10, padding: 12, borderRadius: 8,
+                marginBottom: mobile ? 8 : 10,
+                padding: mobile ? 14 : 12, borderRadius: mobile ? 12 : 8,
                 background: affordable ? `${upg.color}0A` : 'rgba(255,255,255,0.02)',
                 border: affordable ? `1px solid ${upg.color}33` : '1px solid rgba(255,255,255,0.04)',
                 transition: 'all 0.15s',
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <span style={{ fontSize: 11, color: '#ddd' }}>
+                <span style={{ fontSize: mobile ? 13 : 11, color: '#ddd' }}>
                   <span style={{ marginRight: 6 }}>{upg.icon}</span>
                   {upg.name}
                 </span>
-                <span style={{ fontSize: 9, color: upg.color, opacity: 0.7 }}>
+                <span style={{ fontSize: mobile ? 10 : 9, color: upg.color, opacity: 0.7 }}>
                   {upg.currentLevel}/{upg.maxLevel}
                 </span>
               </div>
-              <div style={{ fontSize: 9, color: '#888', marginBottom: 6 }}>
+              <div style={{ fontSize: mobile ? 10 : 9, color: '#888', marginBottom: 6 }}>
                 {upg.getDesc()}
               </div>
               {next && !maxed ? (
                 <>
-                  <div style={{ fontSize: 9, marginBottom: 6, opacity: affordable ? 1 : 0.5 }}>
+                  <div style={{ fontSize: mobile ? 10 : 9, marginBottom: 6, opacity: affordable ? 1 : 0.5 }}>
                     {formatCost(next.cost as Record<string, number>)}
                   </div>
                   <button
                     onClick={() => onPurchase(upg.id)}
                     disabled={!affordable}
                     style={{
-                      width: '100%', padding: '7px 0',
+                      width: '100%', padding: mobile ? '12px 0' : '7px 0',
                       background: affordable
                         ? `linear-gradient(180deg, ${upg.color}, ${upg.color}88)`
                         : '#222',
                       color: affordable ? '#000' : '#555',
-                      border: 'none', borderRadius: 5,
-                      fontSize: 10, fontFamily: 'inherit',
+                      border: 'none', borderRadius: mobile ? 10 : 5,
+                      fontSize: mobile ? 12 : 10, fontFamily: 'inherit',
                       cursor: affordable ? 'pointer' : 'default',
                       fontWeight: 'bold',
                       letterSpacing: 1,
                       transition: 'all 0.1s',
+                      WebkitTapHighlightColor: 'transparent',
+                      minHeight: mobile ? 44 : undefined,
                     }}
                   >
                     {affordable ? 'PURCHASE' : 'NEED MORE ORE'}
@@ -230,7 +260,7 @@ export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: Upgrad
                 </>
               ) : (
                 <div style={{
-                  fontSize: 10, textAlign: 'center',
+                  fontSize: mobile ? 12 : 10, textAlign: 'center',
                   color: maxed ? '#44FF44' : upg.color,
                   padding: '4px 0',
                 }}>
@@ -249,6 +279,10 @@ export function UpgradeTree({ resources, upgrades, onPurchase, onClose }: Upgrad
         @keyframes upgradeSlideIn {
           from { transform: translateX(100px); }
           to { transform: translateX(0); }
+        }
+        @keyframes upgradeSlideUp {
+          from { transform: translateY(100%); }
+          to { transform: translateY(0); }
         }
       `}</style>
     </div>

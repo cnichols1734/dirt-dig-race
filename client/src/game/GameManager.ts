@@ -96,7 +96,7 @@ export class GameManager {
   private setupInput() {
     const canvas = this.app.canvas;
 
-    canvas.addEventListener('click', (e: MouseEvent) => {
+    const handleInteraction = (clientX: number, clientY: number) => {
       if (this.phase !== GamePhase.DIGGING) return;
       audioManager.init();
 
@@ -110,8 +110,8 @@ export class GameManager {
       }
 
       const rect = canvas.getBoundingClientRect();
-      const sx = e.clientX - rect.left;
-      const sy = e.clientY - rect.top;
+      const sx = clientX - rect.left;
+      const sy = clientY - rect.top;
       const world = this.camera.screenToWorld(sx, sy);
       const tilePos = this.gameMap.worldToTile(world.x, world.y);
 
@@ -127,7 +127,17 @@ export class GameManager {
       }
 
       socketManager.send({ type: 'DIG', payload: { tileX: tilePos.x, tileY: tilePos.y } });
+    };
+
+    canvas.addEventListener('click', (e: MouseEvent) => {
+      handleInteraction(e.clientX, e.clientY);
     });
+
+    canvas.addEventListener('touchstart', (e: TouchEvent) => {
+      if (e.cancelable) e.preventDefault();
+      const touch = e.touches[0];
+      if (touch) handleInteraction(touch.clientX, touch.clientY);
+    }, { passive: false });
 
     window.addEventListener('keydown', (e: KeyboardEvent) => {
       if (e.key === 'q' || e.key === 'Q') {
@@ -458,6 +468,7 @@ export class GameManager {
           const wx = op.x * SCALED_TILE + SCALED_TILE / 2;
           const wy = op.y * SCALED_TILE + SCALED_TILE / 2;
           this.combat.showOpponent(wx, wy, op.hp || 50, op.maxHp || 50);
+          this.emit('opponentPosition', op);
           break;
         }
 
@@ -517,6 +528,25 @@ export class GameManager {
 
   purchaseUpgrade(upgradeId: string) {
     socketManager.send({ type: 'PURCHASE_UPGRADE', payload: { upgradeId } });
+  }
+
+  useSonar() {
+    if (this.phase === GamePhase.DIGGING) {
+      socketManager.send({ type: 'USE_SONAR', payload: {} });
+    }
+  }
+
+  useDynamite() {
+    if (this.phase === GamePhase.DIGGING) {
+      socketManager.send({ type: 'USE_DYNAMITE', payload: { tileX: this.player.x, tileY: this.player.y } });
+      audioManager.playDynamiteFuse();
+    }
+  }
+
+  attack() {
+    if (this.phase === GamePhase.DIGGING) {
+      socketManager.send({ type: 'ATTACK', payload: {} });
+    }
   }
 
   private startGameLoop() {
