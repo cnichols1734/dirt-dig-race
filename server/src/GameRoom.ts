@@ -293,6 +293,14 @@ export class GameRoom {
       this.sendPlayerState(player);
     }
 
+    for (const [id, p] of this.players) {
+      if (id === playerId || !p.socket?.emit) continue;
+      p.socket.emit('message', {
+        type: 'OPPONENT_TILE_UPDATE',
+        payload: { x: tx, y: ty, hp: tile.hp, broken, damageDealt: damage },
+      });
+    }
+
     if (broken) tile.ore = OreType.NONE;
   }
 
@@ -1050,7 +1058,8 @@ export class GameRoom {
       } else {
         const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
         tile.hp -= damage;
-        if (tile.hp <= 0) {
+        const broken = tile.hp <= 0;
+        if (broken) {
           tile.hp = 0;
           if (tile.ore !== OreType.NONE) this.collectOre(bot.state, tile.ore);
           tile.type = TileType.EMPTY;
@@ -1059,6 +1068,13 @@ export class GameRoom {
           bot.state.y = ny;
           bot.state.tilesDug++;
           this.checkTremor(botId!);
+        }
+        for (const [id, p] of this.players) {
+          if (!p.socket?.emit) continue;
+          p.socket.emit('message', {
+            type: 'OPPONENT_TILE_UPDATE',
+            payload: { x: nx, y: ny, hp: tile.hp, broken, damageDealt: damage },
+          });
         }
       }
 

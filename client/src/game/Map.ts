@@ -326,7 +326,12 @@ export class GameMap {
       for (let x = 0; x < this.width; x++) {
         const tile = this.tiles[y][x];
         if (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR) {
-          this.tileSprites[y][x] = null;
+          const fg = new Graphics();
+          this.drawFloorTile(fg, x, y, tile.type);
+          fg.x = x * SCALED_TILE;
+          fg.y = y * SCALED_TILE;
+          this.container.addChild(fg);
+          this.tileSprites[y][x] = fg;
           this.crackOverlays[y][x] = null;
           this.oreOverlays[y][x] = null;
           continue;
@@ -472,45 +477,139 @@ export class GameMap {
   }
 
   private drawTile(g: Graphics, tile: TileData) {
+    const s = SCALED_TILE;
     const baseColor = TILE_COLORS[tile.type] || 0x4A4A4A;
-    g.rect(0, 0, SCALED_TILE, SCALED_TILE);
+
+    g.rect(0, 0, s, s);
     g.fill(baseColor);
-    g.rect(0, 0, SCALED_TILE, 2);
-    g.fill({ color: 0xffffff, alpha: 0.06 });
-    g.rect(0, SCALED_TILE - 2, SCALED_TILE, 2);
-    g.fill({ color: 0x000000, alpha: 0.15 });
-    g.rect(SCALED_TILE - 1, 0, 1, SCALED_TILE);
-    g.fill({ color: 0x000000, alpha: 0.1 });
+
+    g.rect(0, 0, s, 3);
+    g.fill({ color: 0xffffff, alpha: 0.08 });
+    g.rect(0, s - 3, s, 3);
+    g.fill({ color: 0x000000, alpha: 0.2 });
+    g.rect(0, 0, 2, s);
+    g.fill({ color: 0xffffff, alpha: 0.04 });
+    g.rect(s - 2, 0, 2, s);
+    g.fill({ color: 0x000000, alpha: 0.12 });
+
+    const hash = (tile.x * 73 + tile.y * 137) & 0xFFFF;
+
+    if (tile.type === TileType.DIRT || tile.type === TileType.CLAY) {
+      for (let i = 0; i < 4; i++) {
+        const px = ((hash + i * 19) % (s - 8)) + 4;
+        const py = ((hash + i * 31) % (s - 8)) + 4;
+        const sz = 2 + (hash + i) % 3;
+        g.circle(px, py, sz);
+        g.fill({ color: tile.type === TileType.DIRT ? 0x6B4B14 : 0x7A4030, alpha: 0.2 });
+      }
+      for (let i = 0; i < 2; i++) {
+        const lx = ((hash + i * 23) % (s - 12)) + 6;
+        const ly = ((hash + i * 41) % (s - 6)) + 3;
+        g.moveTo(lx, ly);
+        g.lineTo(lx + 6 + i * 3, ly + 2);
+        g.stroke({ color: 0x000000, width: 1, alpha: 0.08 });
+      }
+    }
+
+    if (tile.type === TileType.STONE || tile.type === TileType.HARD_ROCK) {
+      for (let i = 0; i < 3; i++) {
+        const lx = ((hash + i * 17) % (s - 20)) + 5;
+        const ly = ((hash + i * 29) % (s - 10)) + 5;
+        g.moveTo(lx, ly);
+        g.lineTo(lx + 10 + i * 4, ly + 3 - i);
+        g.stroke({ color: 0xffffff, width: 1, alpha: 0.04 });
+      }
+      for (let i = 0; i < 5; i++) {
+        const px = ((hash + i * 13) % (s - 6)) + 3;
+        const py = ((hash + i * 23) % (s - 6)) + 3;
+        g.circle(px, py, 1 + hash % 2);
+        g.fill({ color: tile.type === TileType.HARD_ROCK ? 0x556666 : 0x666666, alpha: 0.15 });
+      }
+    }
+
+    if (tile.type === TileType.GRANITE) {
+      for (let i = 0; i < 7; i++) {
+        const px = ((hash + i * 13 + 7) % (s - 4)) + 2;
+        const py = ((hash + i * 17 + 3) % (s - 4)) + 2;
+        const sz = 1.5 + (hash + i) % 3;
+        g.circle(px, py, sz);
+        g.fill({ color: 0xbbbbcc, alpha: 0.18 });
+      }
+      g.moveTo(s * 0.2, s * 0.3);
+      g.lineTo(s * 0.8, s * 0.7);
+      g.stroke({ color: 0x000000, width: 1, alpha: 0.1 });
+    }
+
+    if (tile.type === TileType.OBSIDIAN) {
+      g.rect(2, 2, s - 4, s - 4);
+      g.fill({ color: 0x1a1a30, alpha: 0.3 });
+      for (let i = 0; i < 3; i++) {
+        const px = ((hash + i * 19) % (s - 10)) + 5;
+        const py = ((hash + i * 31) % (s - 10)) + 5;
+        g.moveTo(px, py);
+        g.lineTo(px + 8, py - 4);
+        g.lineTo(px + 4, py + 6);
+        g.closePath();
+        g.fill({ color: 0x3333aa, alpha: 0.08 });
+      }
+      g.rect(s * 0.3, 0, 2, s);
+      g.fill({ color: 0x4444cc, alpha: 0.04 });
+    }
 
     if (tile.type === TileType.CRYSTAL_WALL) {
-      const cx = SCALED_TILE * 0.3, cy = SCALED_TILE * 0.5;
-      g.moveTo(cx, cy - 12);
-      g.lineTo(cx + 8, cy);
-      g.lineTo(cx, cy + 12);
-      g.lineTo(cx - 8, cy);
+      const cx1 = s * 0.3, cy1 = s * 0.5;
+      g.moveTo(cx1, cy1 - 14);
+      g.lineTo(cx1 + 10, cy1);
+      g.lineTo(cx1, cy1 + 14);
+      g.lineTo(cx1 - 10, cy1);
       g.closePath();
-      g.fill({ color: 0x00CED1, alpha: 0.3 });
-    }
-    if (tile.type === TileType.GRANITE) {
-      for (let i = 0; i < 5; i++) {
-        const sx = (i * 13 + 7) % SCALED_TILE;
-        const sy = (i * 17 + 3) % SCALED_TILE;
-        g.circle(sx, sy, 2);
-        g.fill({ color: 0xcccccc, alpha: 0.15 });
-      }
+      g.fill({ color: 0x00CED1, alpha: 0.35 });
+
+      const cx2 = s * 0.7, cy2 = s * 0.35;
+      g.moveTo(cx2, cy2 - 8);
+      g.lineTo(cx2 + 6, cy2);
+      g.lineTo(cx2, cy2 + 8);
+      g.lineTo(cx2 - 6, cy2);
+      g.closePath();
+      g.fill({ color: 0x9B30FF, alpha: 0.2 });
+
+      g.circle(cx1 - 2, cy1 - 5, 2);
+      g.fill({ color: 0xFFFFFF, alpha: 0.4 });
     }
   }
 
   private drawOreOverlay(g: Graphics, ore: OreType) {
     const color = ORE_COLORS[ore];
-    for (let i = 0; i < 6; i++) {
-      const ox = 8 + (i * 11) % (SCALED_TILE - 16);
-      const oy = 8 + (i * 7 + 5) % (SCALED_TILE - 16);
-      g.circle(ox, oy, 3);
-      g.fill({ color, alpha: 0.7 });
+    const s = SCALED_TILE;
+    const half = s / 2;
+
+    g.circle(half, half, 7);
+    g.fill({ color, alpha: 0.6 });
+    g.circle(half, half, 5);
+    g.fill({ color, alpha: 0.8 });
+
+    for (let i = 0; i < 5; i++) {
+      const angle = (i / 5) * Math.PI * 2 + 0.3;
+      const r = 12 + (i % 3) * 4;
+      const ox = half + Math.cos(angle) * r;
+      const oy = half + Math.sin(angle) * r;
+      const sz = 2 + i % 2;
+      if (ore === OreType.CRYSTAL || ore === OreType.EMBER_STONE) {
+        const hs = sz;
+        g.moveTo(ox, oy - hs);
+        g.lineTo(ox + hs, oy);
+        g.lineTo(ox, oy + hs);
+        g.lineTo(ox - hs, oy);
+        g.closePath();
+        g.fill({ color, alpha: 0.7 });
+      } else {
+        g.circle(ox, oy, sz);
+        g.fill({ color, alpha: 0.65 });
+      }
     }
-    g.circle(SCALED_TILE / 2, SCALED_TILE / 2, 5);
-    g.fill({ color, alpha: 0.5 });
+
+    g.circle(half - 1, half - 2, 2);
+    g.fill({ color: 0xFFFFFF, alpha: 0.3 });
   }
 
   updateTile(x: number, y: number, hp: number, broken: boolean) {
@@ -526,8 +625,47 @@ export class GameMap {
       const crackSprite = this.crackOverlays[y]?.[x];
       if (crackSprite) { this.container.removeChild(crackSprite); this.crackOverlays[y][x] = null; }
       tile.ore = OreType.NONE;
+
+      const fg = new Graphics();
+      this.drawFloorTile(fg, x, y, TileType.EMPTY);
+      fg.x = x * SCALED_TILE;
+      fg.y = y * SCALED_TILE;
+      this.container.addChild(fg);
+      this.tileSprites[y][x] = fg;
     } else {
       this.updateCracks(x, y, tile);
+    }
+  }
+
+  private drawFloorTile(g: Graphics, x: number, y: number, type: TileType) {
+    const s = SCALED_TILE;
+    const biome = this.getBiome(x);
+    const hash = (x * 73 + y * 137) & 0xFFFF;
+
+    let baseColor = 0x0c0c18;
+    if (biome === 'SOIL') baseColor = 0x120d08;
+    else if (biome === 'STONE') baseColor = 0x0e0e16;
+    else if (biome === 'DEEP_ROCK') baseColor = 0x0a0a14;
+    else if (biome === 'CORE') baseColor = 0x080810;
+
+    g.rect(0, 0, s, s);
+    g.fill(baseColor);
+
+    for (let i = 0; i < 3; i++) {
+      const px = ((hash + i * 19) % (s - 4)) + 2;
+      const py = ((hash + i * 31) % (s - 4)) + 2;
+      g.circle(px, py, 1);
+      g.fill({ color: 0x333344, alpha: 0.2 });
+    }
+
+    g.rect(0, s - 1, s, 1);
+    g.fill({ color: 0x222233, alpha: 0.15 });
+    g.rect(s - 1, 0, 1, s);
+    g.fill({ color: 0x222233, alpha: 0.1 });
+
+    if (type === TileType.NODE_FLOOR) {
+      g.rect(2, 2, s - 4, s - 4);
+      g.fill({ color: 0x1a1a3a, alpha: 0.3 });
     }
   }
 

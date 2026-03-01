@@ -102,12 +102,30 @@ export class FogOfWar {
           alpha = Math.min(0.95, this.fadingTiles.get(key)!) * 0.95;
         }
 
+        if (isRevealed) continue;
+
+        const hasRevealedNeighbor = this.hasAdjacentRevealed(x, y);
+        if (hasRevealedNeighbor) {
+          alpha = 0.7;
+        }
+
         if (alpha > 0.01) {
           this.fogGraphics.rect(x * SCALED_TILE, y * SCALED_TILE, SCALED_TILE, SCALED_TILE);
           this.fogGraphics.fill({ color: 0x050510, alpha });
         }
       }
     }
+  }
+
+  private hasAdjacentRevealed(x: number, y: number): boolean {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (dx === 0 && dy === 0) continue;
+        const key = `${x + dx},${y + dy}`;
+        if (this.revealed.has(key) || this.sonarRevealed.has(key)) return true;
+      }
+    }
+    return false;
   }
 
   isRevealed(x: number, y: number): boolean {

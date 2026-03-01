@@ -240,6 +240,9 @@ export class Player {
 
     this.helmet.roundRect(-11, -31, 22, 4, 2);
     this.helmet.fill({ color: 0xFFFFFF, alpha: 0.15 });
+
+    this.helmet.roundRect(-4, -30, 8, 2, 1);
+    this.helmet.fill({ color: 0xFFFFFF, alpha: 0.1 });
   }
 
   private drawHeadlamp() {
