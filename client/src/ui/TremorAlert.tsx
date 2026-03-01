@@ -1,5 +1,6 @@
 import React from 'react';
 import { TremorPayload } from '@dig/shared';
+import { useIsMobile } from './hooks';
 
 interface TremorAlertProps {
   tremors: TremorPayload[];
@@ -22,6 +23,7 @@ const intensityIcons: Record<string, string> = {
 };
 
 export function TremorAlert({ tremors, sonarAlerts, dynamiteAlerts }: TremorAlertProps) {
+  const mobile = useIsMobile();
   const allAlerts = [
     ...tremors.map(t => ({
       message: t.message,
@@ -47,9 +49,15 @@ export function TremorAlert({ tremors, sonarAlerts, dynamiteAlerts }: TremorAler
 
   return (
     <div style={{
-      position: 'absolute', bottom: 70, left: 16, zIndex: 50,
+      position: 'absolute',
+      ...(mobile
+        ? { top: 'calc(env(safe-area-inset-top, 4px) + 72px)', left: 8, right: 8 }
+        : { bottom: 70, left: 16 }
+      ),
+      zIndex: 50,
       display: 'flex', flexDirection: 'column', gap: 6,
-      maxWidth: 340,
+      maxWidth: mobile ? undefined : 340,
+      pointerEvents: 'none',
     }}>
       {allAlerts.map((alert, i) => (
         <div
@@ -58,14 +66,15 @@ export function TremorAlert({ tremors, sonarAlerts, dynamiteAlerts }: TremorAler
             background: 'rgba(8,8,20,0.9)',
             border: `1px solid ${alert.color}22`,
             borderLeft: `3px solid ${alert.color}`,
-            borderRadius: 6, padding: '8px 12px',
-            fontSize: 9, color: alert.color,
+            borderRadius: mobile ? 10 : 6,
+            padding: mobile ? '8px 10px' : '8px 12px',
+            fontSize: mobile ? 8 : 9, color: alert.color,
             animation: 'alertSlideIn 0.3s cubic-bezier(.4,0,.2,1)',
             display: 'flex', alignItems: 'center', gap: 8,
           }}
         >
           <span style={{
-            fontFamily: 'monospace', fontSize: 8, opacity: 0.6,
+            fontFamily: 'monospace', fontSize: mobile ? 7 : 8, opacity: 0.6,
             minWidth: 30, textAlign: 'center',
           }}>
             {alert.icon}

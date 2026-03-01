@@ -239,6 +239,18 @@ export function App() {
     }));
   }, []);
 
+  const handleUseSonar = useCallback(() => {
+    gameManagerInstance?.useSonar();
+  }, []);
+
+  const handleUseDynamite = useCallback(() => {
+    gameManagerInstance?.useDynamite();
+  }, []);
+
+  const handleAttack = useCallback(() => {
+    gameManagerInstance?.attack();
+  }, []);
+
   return (
     <div style={{ width: '100%', height: '100%', fontFamily: '"Press Start 2P", "VT323", monospace', color: '#fff', pointerEvents: 'none' }}>
       <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap" rel="stylesheet" />
@@ -289,6 +301,9 @@ export function App() {
             playerMaxHp={state.playerMaxHp}
             dugTiles={state.dugTiles}
             onToggleUpgrades={() => setState(s => ({ ...s, showUpgrades: !s.showUpgrades }))}
+            onUseSonar={handleUseSonar}
+            onUseDynamite={handleUseDynamite}
+            onAttack={handleAttack}
           />
 
           <TremorAlert tremors={state.tremors} sonarAlerts={state.sonarAlerts} dynamiteAlerts={[...state.dynamiteAlerts, ...state.nodeAlerts]} />

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { GameOverPayload } from '@dig/shared';
 import { formatTime } from '../utils/helpers';
+import { useIsMobile } from './hooks';
 
 interface ScoreScreenProps {
   data: GameOverPayload;
@@ -10,6 +11,7 @@ interface ScoreScreenProps {
 
 export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
   const [revealStep, setRevealStep] = useState(0);
+  const mobile = useIsMobile();
 
   useEffect(() => {
     const timers: ReturnType<typeof setTimeout>[] = [];
@@ -30,10 +32,12 @@ export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
       alignItems: 'center', justifyContent: 'center',
       background: 'rgba(0,0,0,0.85)',
       pointerEvents: 'auto' as const,
+      padding: mobile ? '24px 16px' : 0,
+      overflowY: mobile ? 'auto' : undefined,
     }}>
       {revealStep >= 1 && (
         <div style={{
-          fontSize: 36, fontWeight: 'bold', marginBottom: 8,
+          fontSize: mobile ? 28 : 36, fontWeight: 'bold', marginBottom: 8,
           color: isWinner ? '#FFD700' : '#FF4444',
           textShadow: `0 0 20px ${isWinner ? '#FFD700' : '#FF4444'}`,
         }}>
@@ -42,26 +46,26 @@ export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
       )}
 
       {revealStep >= 2 && (
-        <div style={{ fontSize: 10, color: '#999', marginBottom: 24 }}>
+        <div style={{ fontSize: mobile ? 9 : 10, color: '#999', marginBottom: mobile ? 16 : 24 }}>
           {data.reason}
         </div>
       )}
 
       {revealStep >= 3 && (
         <div style={{
-          display: 'flex', gap: 40, marginBottom: 24,
+          display: 'flex', gap: mobile ? 24 : 40, marginBottom: mobile ? 16 : 24,
           fontSize: 11, color: '#CCC',
         }}>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 9, color: '#4488FF', marginBottom: 4 }}>YOU</div>
-            <div style={{ fontSize: 28, color: '#4488FF', fontWeight: 'bold' }}>
+            <div style={{ fontSize: mobile ? 22 : 28, color: '#4488FF', fontWeight: 'bold' }}>
               {Math.floor(data.finalScores[playerId] || 0)}
             </div>
             <div style={{ fontSize: 8, color: '#666' }}>points</div>
           </div>
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 9, color: '#FF4444', marginBottom: 4 }}>RIVAL</div>
-            <div style={{ fontSize: 28, color: '#FF4444', fontWeight: 'bold' }}>
+            <div style={{ fontSize: mobile ? 22 : 28, color: '#FF4444', fontWeight: 'bold' }}>
               {Math.floor(opStats ? (data.finalScores[opStats.playerId] || 0) : 0)}
             </div>
             <div style={{ fontSize: 8, color: '#666' }}>points</div>
@@ -71,11 +75,16 @@ export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
 
       {revealStep >= 4 && myStats && (
         <div style={{
-          background: 'rgba(255,255,255,0.03)', borderRadius: 8,
-          padding: '12px 24px', marginBottom: 16,
+          background: 'rgba(255,255,255,0.03)', borderRadius: mobile ? 12 : 8,
+          padding: mobile ? '14px 18px' : '12px 24px',
+          marginBottom: 16,
           border: '1px solid rgba(255,255,255,0.05)',
-          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 32px',
-          fontSize: 9, color: '#AAA',
+          display: 'grid',
+          gridTemplateColumns: mobile ? '1fr' : '1fr 1fr',
+          gap: mobile ? '6px' : '8px 32px',
+          fontSize: mobile ? 10 : 9, color: '#AAA',
+          width: mobile ? '100%' : undefined,
+          maxWidth: mobile ? 340 : undefined,
         }}>
           <div>Tiles Dug: <span style={{ color: '#FFF' }}>{myStats.tilesDug}</span></div>
           <div>Nodes Claimed: <span style={{ color: '#4488FF' }}>{myStats.nodesClaimed}</span></div>
@@ -89,7 +98,8 @@ export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
       {revealStep >= 5 && myStats && (
         <div style={{
           display: 'flex', gap: 12, marginBottom: 20,
-          fontSize: 9,
+          fontSize: mobile ? 10 : 9,
+          flexWrap: 'wrap', justifyContent: 'center',
         }}>
           {Object.entries(myStats.oreCollected).map(([key, val]) => (
             val > 0 ? (
@@ -107,12 +117,18 @@ export function ScoreScreen({ data, playerId, onPlayAgain }: ScoreScreenProps) {
       {revealStep >= 6 && (
         <button
           onClick={onPlayAgain}
+          onTouchStart={e => { e.currentTarget.style.transform = 'scale(0.95)'; }}
+          onTouchEnd={e => { e.currentTarget.style.transform = 'scale(1)'; }}
           style={{
             background: 'linear-gradient(180deg, #00CED1, #008B8B)',
-            border: 'none', borderRadius: 8,
-            color: '#000', padding: '12px 32px',
-            fontSize: 12, fontFamily: 'inherit',
+            border: 'none', borderRadius: mobile ? 14 : 8,
+            color: '#000',
+            padding: mobile ? '16px 40px' : '12px 32px',
+            fontSize: mobile ? 14 : 12, fontFamily: 'inherit',
             cursor: 'pointer', fontWeight: 'bold',
+            WebkitTapHighlightColor: 'transparent',
+            minHeight: mobile ? 50 : undefined,
+            transition: 'transform 0.1s',
           }}
         >
           PLAY AGAIN
