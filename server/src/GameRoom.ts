@@ -1,13 +1,15 @@
 import { Server, Socket } from 'socket.io';
 import {
   TileData, TileType, OreType, PlayerState, GamePhase,
-  Resources, UpgradeState, EncounterType, EncounterState,
+  Resources, UpgradeState, OreNode, NodeTier,
   ClientMessage, MatchFoundPayload, TileUpdatePayload,
-  TremorPayload, SonarResultPayload, EncounterStartPayload,
-  GameOverPayload,
+  TremorPayload, SonarResultPayload, NodeUpdatePayload,
+  NodeClaimedPayload, NodeContestedPayload, ScoreUpdatePayload,
+  VeinRushPayload, TremorSurgePayload, PlayerHitPayload,
+  PlayerKnockedOutPayload, CaveInPayload, GameOverPayload,
 } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
-import { generateMap, getSpawnPositions } from './MapGenerator.js';
+import { generateMap, getSpawnPositions, getNodeDefinitions } from './MapGenerator.js';
 
 function emptyResources(): Resources {
   return { copper: 0, iron: 0, gold: 0, crystal: 0, emberStone: 0 };
@@ -15,14 +17,9 @@ function emptyResources(): Resources {
 
 function defaultUpgrades(): UpgradeState {
   return {
-    pickaxeLevel: 1,
-    lanternLevel: 1,
-    sonarUnlocked: false,
-    dynamiteUnlocked: false,
-    dynamiteCharges: 0,
-    steelBootsLevel: 0,
-    tremorSenseLevel: 1,
-    momentumLevel: 0,
+    pickaxeLevel: 1, lanternLevel: 1,
+    sonarUnlocked: false, dynamiteUnlocked: false, dynamiteCharges: 0,
+    steelBootsLevel: 0, tremorSenseLevel: 1, momentumLevel: 0,
   };
 }
 
@@ -59,59 +56,73 @@ function getDirection(fromX: number, fromY: number, toX: number, toY: number): s
   return dirs.join('-');
 }
 
-function distance(x1: number, y1: number, x2: number, y2: number): number {
+function dist(x1: number, y1: number, x2: number, y2: number): number {
   return Math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2);
+}
+
+interface PlayerEntry {
+  socket: Socket;
+  state: PlayerState;
+  lastClickTime: number;
+  clickCount: number;
+  lastTremorTime: number;
+  lastAttackTime: number;
+  consecutiveClicks: { x: number; y: number; count: number; lastTime: number };
 }
 
 export class GameRoom {
   id: string;
   io: Server;
-  players: Map<string, { socket: Socket; state: PlayerState; lastClickTime: number; clickCount: number; lastTremorTime: number; consecutiveClicks: { x: number; y: number; count: number; lastTime: number } }> = new Map();
+  players: Map<string, PlayerEntry> = new Map();
   map: TileData[][];
+  nodes: OreNode[];
+  scores: Record<string, number> = {};
   phase: GamePhase = GamePhase.COUNTDOWN;
-  encounter: EncounterState | null = null;
   mapSeed: number;
   startTime: number = 0;
-  encounterTimer: ReturnType<typeof setInterval> | null = null;
-  collapseTimer: ReturnType<typeof setInterval> | null = null;
   gameOverSent = false;
-  botTimer: ReturnType<typeof setInterval> | null = null;
   isBotGame = false;
+
+  private scoreInterval: ReturnType<typeof setInterval> | null = null;
+  private veinRushTimeout: ReturnType<typeof setTimeout> | null = null;
+  private tremorSurgeTimeout: ReturnType<typeof setTimeout> | null = null;
+  private caveInInterval: ReturnType<typeof setInterval> | null = null;
+  private caveInRadius = 0;
+  private botTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(id: string, io: Server) {
     this.id = id;
     this.io = io;
     this.mapSeed = Math.floor(Math.random() * 2147483646) + 1;
     this.map = generateMap({ width: BALANCE.MAP_WIDTH, height: BALANCE.MAP_HEIGHT, seed: this.mapSeed });
+    this.nodes = getNodeDefinitions(this.mapSeed);
   }
 
-  addPlayer(socket: Socket, name: string): number {
+  addPlayer(socket: Socket, _name: string): number {
     const spawns = getSpawnPositions(BALANCE.MAP_HEIGHT, BALANCE.MAP_WIDTH);
     const idx = this.players.size;
     const spawn = idx === 0 ? spawns.p1 : spawns.p2;
 
     const state: PlayerState = {
       id: socket.id,
-      x: spawn.x,
-      y: spawn.y,
+      x: spawn.x, y: spawn.y,
       resources: emptyResources(),
       upgrades: defaultUpgrades(),
-      encounterHp: BALANCE.ENCOUNTER.PLAYER_ENCOUNTER_HP,
-      knockedOut: false,
-      knockoutEndTime: 0,
-      tilesDug: 0,
-      sonarCooldownEnd: 0,
+      hp: BALANCE.COMBAT.PLAYER_HP,
+      maxHp: BALANCE.COMBAT.PLAYER_HP,
+      knockedOut: false, knockoutEndTime: 0,
+      respawnX: spawn.x, respawnY: spawn.y,
+      tilesDug: 0, sonarCooldownEnd: 0,
+      score: 0, nodesClaimed: 0, nodesStolen: 0, kills: 0,
     };
 
     this.players.set(socket.id, {
-      socket,
-      state,
-      lastClickTime: 0,
-      clickCount: 0,
-      lastTremorTime: 0,
+      socket, state,
+      lastClickTime: 0, clickCount: 0,
+      lastTremorTime: 0, lastAttackTime: 0,
       consecutiveClicks: { x: -1, y: -1, count: 0, lastTime: 0 },
     });
-
+    this.scores[socket.id] = 0;
     socket.join(this.id);
     return idx;
   }
@@ -124,45 +135,42 @@ export class GameRoom {
 
     const state: PlayerState = {
       id: botId,
-      x: spawn.x,
-      y: spawn.y,
+      x: spawn.x, y: spawn.y,
       resources: emptyResources(),
       upgrades: defaultUpgrades(),
-      encounterHp: BALANCE.ENCOUNTER.PLAYER_ENCOUNTER_HP,
-      knockedOut: false,
-      knockoutEndTime: 0,
-      tilesDug: 0,
-      sonarCooldownEnd: 0,
+      hp: BALANCE.COMBAT.PLAYER_HP,
+      maxHp: BALANCE.COMBAT.PLAYER_HP,
+      knockedOut: false, knockoutEndTime: 0,
+      respawnX: spawn.x, respawnY: spawn.y,
+      tilesDug: 0, sonarCooldownEnd: 0,
+      score: 0, nodesClaimed: 0, nodesStolen: 0, kills: 0,
     };
 
     this.players.set(botId, {
-      socket: null as any,
-      state,
-      lastClickTime: 0,
-      clickCount: 0,
-      lastTremorTime: 0,
+      socket: null as any, state,
+      lastClickTime: 0, clickCount: 0,
+      lastTremorTime: 0, lastAttackTime: 0,
       consecutiveClicks: { x: -1, y: -1, count: 0, lastTime: 0 },
     });
+    this.scores[botId] = 0;
   }
 
   start() {
     this.startTime = Date.now();
-
     const playerEntries = Array.from(this.players.entries());
+
     playerEntries.forEach(([id, p], idx) => {
       if (!p.socket?.emit) return;
-      const otherIdx = idx === 0 ? 1 : 0;
-      const otherName = playerEntries[otherIdx]?.[1]?.socket?.id
+      const otherName = playerEntries.length > 1 && playerEntries[idx === 0 ? 1 : 0]?.[1]?.socket?.emit
         ? 'Rival Miner' : 'Bot Miner';
 
       const payload: MatchFoundPayload = {
-        roomId: this.id,
-        mapSeed: this.mapSeed,
-        playerId: id,
-        playerIndex: idx,
-        spawnX: p.state.x,
-        spawnY: p.state.y,
+        roomId: this.id, mapSeed: this.mapSeed,
+        playerId: id, playerIndex: idx,
+        spawnX: p.state.x, spawnY: p.state.y,
         opponentName: otherName,
+        nodes: [],
+        gameDurationMs: BALANCE.SCORING.GAME_DURATION_MS,
       };
       p.socket.emit('message', { type: 'MATCH_FOUND', payload });
     });
@@ -175,6 +183,9 @@ export class GameRoom {
         clearInterval(countdownInterval);
         this.phase = GamePhase.DIGGING;
         this.broadcast({ type: 'GAME_START', payload: {} });
+        this.startScoring();
+        this.scheduleVeinRush();
+        this.scheduleTremorSurge();
         if (this.isBotGame) this.startBot();
       }
     }, 1000);
@@ -183,18 +194,29 @@ export class GameRoom {
   handleMessage(socketId: string, msg: ClientMessage) {
     const player = this.players.get(socketId);
     if (!player) return;
+    if (this.phase !== GamePhase.DIGGING) return;
+
+    if (player.state.knockedOut) {
+      if (Date.now() >= player.state.knockoutEndTime) {
+        this.respawnPlayer(socketId);
+      } else {
+        return;
+      }
+    }
 
     switch (msg.type) {
       case 'DIG': return this.handleDig(socketId, msg.payload.tileX!, msg.payload.tileY!);
+      case 'CLAIM_NODE': return this.handleClaimNode(socketId, msg.payload.nodeId!);
+      case 'ATTACK': return this.handleAttack(socketId);
       case 'USE_SONAR': return this.handleSonar(socketId);
       case 'USE_DYNAMITE': return this.handleDynamite(socketId, msg.payload.tileX!, msg.payload.tileY!);
       case 'PURCHASE_UPGRADE': return this.handleUpgrade(socketId, msg.payload.upgradeId!);
-      case 'ENCOUNTER_ACTION': return this.handleEncounterAction(socketId, msg.payload.tileX, msg.payload.tileY);
     }
   }
 
+  // --- DIGGING ---
+
   handleDig(playerId: string, tx: number, ty: number) {
-    if (this.phase !== GamePhase.DIGGING) return;
     const player = this.players.get(playerId);
     if (!player) return;
 
@@ -210,17 +232,13 @@ export class GameRoom {
     if (tx < 0 || tx >= BALANCE.MAP_WIDTH || ty < 0 || ty >= BALANCE.MAP_HEIGHT) return;
     const tile = this.map[ty][tx];
 
-    if (tile.type === TileType.EMPTY) {
-      const dist = Math.abs(tx - player.state.x) + Math.abs(ty - player.state.y);
-      if (dist <= 5 && this.canReach(player.state.x, player.state.y, tx, ty)) {
+    if (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR) {
+      const d = Math.abs(tx - player.state.x) + Math.abs(ty - player.state.y);
+      if (d <= 5 && this.canReach(player.state.x, player.state.y, tx, ty)) {
         player.state.x = tx;
         player.state.y = ty;
-        if (player.socket?.emit) {
-          player.socket.emit('message', {
-            type: 'PLAYER_STATE',
-            payload: { x: tx, y: ty, resources: player.state.resources, upgrades: player.state.upgrades, tilesDug: player.state.tilesDug },
-          });
-        }
+        this.checkNodeDiscovery(playerId, tx, ty);
+        this.sendPlayerState(player);
       }
       return;
     }
@@ -228,18 +246,15 @@ export class GameRoom {
 
     const px = player.state.x, py = player.state.y;
     const dx = Math.abs(tx - px), dy = Math.abs(ty - py);
-
     if (dx > 1 || dy > 1) {
       if (dx <= 2 && dy <= 2) {
-        const moved = this.moveTowardTile(player, tx, ty);
-        if (!moved) return;
+        if (!this.moveTowardTile(player, tx, ty)) return;
       } else {
         return;
       }
     }
 
     let damage = getPickaxeDamage(player.state.upgrades.pickaxeLevel);
-
     if (player.state.upgrades.momentumLevel > 0) {
       const cc = player.consecutiveClicks;
       if (cc.x === tx && cc.y === ty && now - cc.lastTime < 250) {
@@ -261,40 +276,24 @@ export class GameRoom {
       player.state.x = tx;
       player.state.y = ty;
       player.state.tilesDug++;
-
       if (tile.ore !== OreType.NONE) {
         this.collectOre(player.state, tile.ore);
       }
-
       this.checkTremor(playerId);
-      this.checkCenterReached(playerId, tx, ty);
+      this.checkNodeDiscovery(playerId, tx, ty);
     }
 
     const update: TileUpdatePayload = {
-      x: tx, y: ty,
-      hp: tile.hp,
-      broken,
-      ore: tile.ore,
-      damageDealt: damage,
+      x: tx, y: ty, hp: tile.hp, broken,
+      ore: tile.ore, damageDealt: damage,
     };
 
     if (player.socket?.emit) {
       player.socket.emit('message', { type: 'TILE_UPDATE', payload: update });
-      player.socket.emit('message', {
-        type: 'PLAYER_STATE',
-        payload: {
-          x: player.state.x,
-          y: player.state.y,
-          resources: player.state.resources,
-          upgrades: player.state.upgrades,
-          tilesDug: player.state.tilesDug,
-        },
-      });
+      this.sendPlayerState(player);
     }
 
-    if (broken) {
-      tile.ore = OreType.NONE;
-    }
+    if (broken) tile.ore = OreType.NONE;
   }
 
   collectOre(state: PlayerState, ore: OreType) {
@@ -307,60 +306,332 @@ export class GameRoom {
     }
   }
 
-  checkTremor(diggerId: string) {
-    const digger = this.players.get(diggerId);
-    if (!digger) return;
-
-    for (const [id, p] of this.players) {
-      if (id === diggerId) continue;
-      const now = Date.now();
-      if (now - p.lastTremorTime < BALANCE.TREMOR_DEBOUNCE_MS) continue;
-
-      const dist = distance(digger.state.x, digger.state.y, p.state.x, p.state.y);
-      const dir = getDirection(p.state.x, p.state.y, digger.state.x, digger.state.y);
-      let tremor: TremorPayload | null = null;
-
-      const tLevel = p.state.upgrades.tremorSenseLevel;
-
-      if (dist < BALANCE.TREMOR_THRESHOLDS.STRONG) {
-        tremor = {
-          intensity: 'extreme',
-          direction: dir,
-          message: tLevel >= 3
-            ? `The ground shakes violently from the ${dir}! ${Math.round(dist)} tiles away!`
-            : `The ground shakes violently from the ${dir}! They're right there!`,
-        };
-      } else if (dist < BALANCE.TREMOR_THRESHOLDS.MODERATE) {
-        tremor = {
-          intensity: 'strong',
-          direction: dir,
-          message: tLevel >= 2
-            ? `Strong vibrations from the ${dir}! About ${Math.round(dist)} tiles away.`
-            : `Strong vibrations from the ${dir}! They're getting close...`,
-        };
-      } else if (dist < BALANCE.TREMOR_THRESHOLDS.FAINT) {
-        tremor = {
-          intensity: 'moderate',
-          direction: dir,
-          message: `You feel vibrations from the ${dir}...`,
-        };
-      } else if (dist < BALANCE.TREMOR_THRESHOLDS.NONE) {
-        tremor = {
-          intensity: 'faint',
-          direction: '',
-          message: 'You feel faint vibrations...',
-        };
-      }
-
-      if (tremor && p.socket?.emit) {
-        p.lastTremorTime = now;
-        p.socket.emit('message', { type: 'TREMOR', payload: tremor });
+  private checkNodeDiscovery(playerId: string, px: number, py: number) {
+    const discoverR = BALANCE.NODES.DISCOVER_RADIUS;
+    for (const node of this.nodes) {
+      if (node.discoveredBy.includes(playerId)) continue;
+      if (dist(px, py, node.x, node.y) <= discoverR) {
+        node.discoveredBy.push(playerId);
+        const player = this.players.get(playerId);
+        if (player?.socket?.emit) {
+          player.socket.emit('message', { type: 'NODE_UPDATE', payload: { node: { ...node } } });
+        }
       }
     }
   }
 
+  // --- NODE CLAIMING ---
+
+  handleClaimNode(playerId: string, nodeId: string) {
+    const player = this.players.get(playerId);
+    if (!player) return;
+
+    const node = this.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    const d = dist(player.state.x, player.state.y, node.x, node.y);
+    if (d > BALANCE.NODES.CAPTURE_RANGE) return;
+
+    const claimPower = getPickaxeDamage(player.state.upgrades.pickaxeLevel);
+
+    if (node.ownerId === null) {
+      node.claimProgress = Math.min(node.claimMax, node.claimProgress + claimPower);
+      if (node.claimProgress >= node.claimMax) {
+        this.claimNodeForPlayer(node, playerId, false);
+      }
+    } else if (node.ownerId === playerId) {
+      return;
+    } else {
+      node.claimProgress = Math.max(0, node.claimProgress - claimPower);
+
+      const ownerId = node.ownerId;
+      const owner = this.players.get(ownerId);
+      if (owner?.socket?.emit) {
+        const dir = getDirection(owner.state.x, owner.state.y, node.x, node.y);
+        const payload: NodeContestedPayload = { nodeId, attackerId: playerId, direction: dir };
+        owner.socket.emit('message', { type: 'NODE_CONTESTED', payload });
+      }
+
+      if (node.claimProgress <= 0) {
+        this.broadcast({ type: 'NODE_LOST', payload: { nodeId, previousOwnerId: ownerId } });
+        node.ownerId = null;
+        node.claimProgress = 0;
+
+        node.claimProgress = Math.min(node.claimMax, claimPower);
+        if (node.claimProgress >= node.claimMax) {
+          this.claimNodeForPlayer(node, playerId, true);
+        }
+      }
+    }
+
+    this.broadcastNodeUpdate(node);
+  }
+
+  private claimNodeForPlayer(node: OreNode, playerId: string, stolen: boolean) {
+    node.ownerId = playerId;
+    node.claimProgress = node.claimMax;
+    const player = this.players.get(playerId);
+    if (player) {
+      player.state.nodesClaimed++;
+      if (stolen) player.state.nodesStolen++;
+    }
+
+    const payload: NodeClaimedPayload = {
+      nodeId: node.id, ownerId: playerId,
+      tier: node.tier, pointsPerSecond: node.pointsPerSecond,
+    };
+    this.broadcast({ type: 'NODE_CLAIMED', payload });
+  }
+
+  private broadcastNodeUpdate(node: OreNode) {
+    const payload: NodeUpdatePayload = { node: { ...node } };
+    this.broadcast({ type: 'NODE_UPDATE', payload });
+  }
+
+  // --- COMBAT ---
+
+  handleAttack(attackerId: string) {
+    const attacker = this.players.get(attackerId);
+    if (!attacker) return;
+
+    const now = Date.now();
+    if (now - attacker.lastAttackTime < 200) return;
+    attacker.lastAttackTime = now;
+
+    for (const [id, target] of this.players) {
+      if (id === attackerId) continue;
+      if (target.state.knockedOut) continue;
+
+      const d = dist(attacker.state.x, attacker.state.y, target.state.x, target.state.y);
+      if (d > BALANCE.COMBAT.ATTACK_RANGE) continue;
+
+      let damage = getPickaxeDamage(attacker.state.upgrades.pickaxeLevel);
+      const reduction = BALANCE.UPGRADES.STEEL_BOOTS[target.state.upgrades.steelBootsLevel]?.reduction || 0;
+      damage = Math.ceil(damage * (1 - reduction));
+
+      target.state.hp -= damage;
+
+      const hitPayload: PlayerHitPayload = {
+        attackerId, targetId: id,
+        damage, targetHp: Math.max(0, target.state.hp),
+      };
+      this.broadcast({ type: 'PLAYER_HIT', payload: hitPayload });
+
+      if (target.state.hp <= 0) {
+        this.knockoutPlayer(id, attackerId);
+      }
+      break;
+    }
+  }
+
+  private knockoutPlayer(playerId: string, killerId: string) {
+    const player = this.players.get(playerId);
+    if (!player) return;
+
+    player.state.knockedOut = true;
+    player.state.knockoutEndTime = Date.now() + BALANCE.COMBAT.RESPAWN_MS;
+    player.state.hp = 0;
+
+    const killer = this.players.get(killerId);
+    if (killer) killer.state.kills++;
+
+    const payload: PlayerKnockedOutPayload = {
+      playerId, killerId, respawnMs: BALANCE.COMBAT.RESPAWN_MS,
+    };
+    this.broadcast({ type: 'PLAYER_KNOCKED_OUT', payload });
+
+    setTimeout(() => {
+      if (this.phase === GamePhase.DIGGING && player.state.knockedOut) {
+        this.respawnPlayer(playerId);
+      }
+    }, BALANCE.COMBAT.RESPAWN_MS);
+  }
+
+  private respawnPlayer(playerId: string) {
+    const player = this.players.get(playerId);
+    if (!player) return;
+
+    player.state.knockedOut = false;
+    player.state.hp = BALANCE.COMBAT.PLAYER_HP;
+    player.state.x = player.state.respawnX;
+    player.state.y = player.state.respawnY;
+
+    this.broadcast({ type: 'PLAYER_RESPAWNED', payload: { playerId, x: player.state.x, y: player.state.y } });
+    this.sendPlayerState(player);
+  }
+
+  // --- SCORING ---
+
+  private startScoring() {
+    this.scoreInterval = setInterval(() => {
+      if (this.phase !== GamePhase.DIGGING) return;
+
+      for (const node of this.nodes) {
+        if (node.ownerId && this.scores[node.ownerId] !== undefined) {
+          const pts = node.supercharged
+            ? node.pointsPerSecond * BALANCE.NODES.SUPERCHARGE_MULTIPLIER
+            : node.pointsPerSecond;
+          this.scores[node.ownerId] += pts;
+
+          const p = this.players.get(node.ownerId);
+          if (p) p.state.score = this.scores[node.ownerId];
+        }
+      }
+
+      const elapsed = Date.now() - this.startTime;
+      const remaining = BALANCE.SCORING.GAME_DURATION_MS - elapsed;
+
+      const pps: Record<string, number> = {};
+      for (const [id] of this.players) {
+        pps[id] = 0;
+        for (const node of this.nodes) {
+          if (node.ownerId === id) {
+            pps[id] += node.supercharged
+              ? node.pointsPerSecond * BALANCE.NODES.SUPERCHARGE_MULTIPLIER
+              : node.pointsPerSecond;
+          }
+        }
+      }
+
+      const payload: ScoreUpdatePayload = {
+        scores: { ...this.scores },
+        pps,
+        timeRemainingMs: Math.max(0, remaining),
+      };
+      this.broadcast({ type: 'SCORE_UPDATE', payload });
+
+      this.checkWinCondition();
+
+      if (elapsed >= BALANCE.EVENTS.CAVE_IN_START_MS && !this.caveInInterval) {
+        this.startCaveIn();
+      }
+    }, 1000);
+  }
+
+  private checkWinCondition() {
+    for (const [id, score] of Object.entries(this.scores)) {
+      if (score >= BALANCE.SCORING.WIN_THRESHOLD) {
+        this.endGame(id, `Reached ${BALANCE.SCORING.WIN_THRESHOLD} points!`);
+        return;
+      }
+    }
+
+    const elapsed = Date.now() - this.startTime;
+    if (elapsed >= BALANCE.SCORING.GAME_DURATION_MS) {
+      let winnerId: string | null = null;
+      let maxScore = -1;
+      let tied = false;
+      for (const [id, score] of Object.entries(this.scores)) {
+        if (score > maxScore) {
+          maxScore = score;
+          winnerId = id;
+          tied = false;
+        } else if (score === maxScore) {
+          tied = true;
+        }
+      }
+      this.endGame(tied ? null : winnerId, 'Time expired!');
+    }
+  }
+
+  // --- EVENTS ---
+
+  private scheduleVeinRush() {
+    const delay = BALANCE.EVENTS.VEIN_RUSH_INTERVAL_MIN_MS +
+      Math.random() * (BALANCE.EVENTS.VEIN_RUSH_INTERVAL_MAX_MS - BALANCE.EVENTS.VEIN_RUSH_INTERVAL_MIN_MS);
+
+    this.veinRushTimeout = setTimeout(() => {
+      if (this.phase !== GamePhase.DIGGING) return;
+
+      const candidates = this.nodes.filter(n => !n.supercharged);
+      if (candidates.length === 0) return;
+
+      const node = candidates[Math.floor(Math.random() * candidates.length)];
+      node.supercharged = true;
+
+      const payload: VeinRushPayload = {
+        nodeId: node.id,
+        durationMs: BALANCE.EVENTS.VEIN_RUSH_DURATION_MS,
+        message: `VEIN RUSH! A node is supercharged for ${BALANCE.EVENTS.VEIN_RUSH_DURATION_MS / 1000}s!`,
+      };
+      this.broadcast({ type: 'VEIN_RUSH', payload });
+      this.broadcastNodeUpdate(node);
+
+      setTimeout(() => {
+        node.supercharged = false;
+        this.broadcastNodeUpdate(node);
+      }, BALANCE.EVENTS.VEIN_RUSH_DURATION_MS);
+
+      this.scheduleVeinRush();
+    }, delay);
+  }
+
+  private scheduleTremorSurge() {
+    this.tremorSurgeTimeout = setTimeout(() => {
+      if (this.phase !== GamePhase.DIGGING) return;
+
+      const playerPositions: Array<{ id: string; x: number; y: number }> = [];
+      for (const [id, p] of this.players) {
+        playerPositions.push({ id, x: p.state.x, y: p.state.y });
+      }
+
+      const payload: TremorSurgePayload = {
+        players: playerPositions,
+        durationMs: BALANCE.EVENTS.TREMOR_SURGE_DURATION_MS,
+      };
+      this.broadcast({ type: 'TREMOR_SURGE', payload });
+
+      this.scheduleTremorSurge();
+    }, BALANCE.EVENTS.TREMOR_SURGE_INTERVAL_MS);
+  }
+
+  private startCaveIn() {
+    this.caveInRadius = 0;
+    this.caveInInterval = setInterval(() => {
+      if (this.phase !== GamePhase.DIGGING) {
+        if (this.caveInInterval) clearInterval(this.caveInInterval);
+        return;
+      }
+
+      this.caveInRadius++;
+      const collapsedTiles: Array<{ x: number; y: number }> = [];
+      const destroyedNodes: string[] = [];
+      const w = BALANCE.MAP_WIDTH, h = BALANCE.MAP_HEIGHT;
+      const r = this.caveInRadius;
+
+      for (let x = 0; x < w; x++) {
+        for (let y = 0; y < h; y++) {
+          const edgeDist = Math.min(x, y, w - 1 - x, h - 1 - y);
+          if (edgeDist < r && this.map[y][x].type !== TileType.BEDROCK) {
+            this.map[y][x].type = TileType.BEDROCK;
+            this.map[y][x].hp = 9999;
+            collapsedTiles.push({ x, y });
+          }
+        }
+      }
+
+      for (const node of this.nodes) {
+        const edgeDist = Math.min(node.x, node.y, w - 1 - node.x, h - 1 - node.y);
+        if (edgeDist < r && node.ownerId !== null) {
+          destroyedNodes.push(node.id);
+          node.ownerId = null;
+          node.claimProgress = 0;
+        }
+      }
+
+      if (collapsedTiles.length > 0) {
+        const payload: CaveInPayload = {
+          collapsedTiles, destroyedNodes,
+          message: 'The walls are closing in!',
+        };
+        this.broadcast({ type: 'CAVE_IN', payload });
+      }
+    }, 1000 / BALANCE.EVENTS.CAVE_IN_SPEED_TILES_PER_SEC);
+  }
+
+  // --- SONAR ---
+
   handleSonar(playerId: string) {
-    if (this.phase !== GamePhase.DIGGING) return;
     const player = this.players.get(playerId);
     if (!player) return;
     if (!player.state.upgrades.sonarUnlocked) return;
@@ -378,8 +649,7 @@ export class GameRoom {
 
     for (let dy = -radius; dy <= radius; dy++) {
       for (let dx = -radius; dx <= radius; dx++) {
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        if (dist > radius) continue;
+        if (Math.sqrt(dx * dx + dy * dy) > radius) continue;
         const nx = px + dx, ny = py + dy;
         if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
         const t = this.map[ny][nx];
@@ -387,13 +657,20 @@ export class GameRoom {
       }
     }
 
+    const revealedNodes = this.nodes
+      .filter(n => dist(px, py, n.x, n.y) <= radius)
+      .map(n => {
+        if (!n.discoveredBy.includes(playerId)) {
+          n.discoveredBy.push(playerId);
+        }
+        return { id: n.id, x: n.x, y: n.y, tier: n.tier, ownerId: n.ownerId };
+      });
+
     let enemyVisible = false;
     let enemyX: number | undefined, enemyY: number | undefined;
-
     for (const [id, p] of this.players) {
       if (id === playerId) continue;
-      const dist = distance(px, py, p.state.x, p.state.y);
-      if (dist <= radius) {
+      if (dist(px, py, p.state.x, p.state.y) <= radius) {
         enemyVisible = true;
         enemyX = p.state.x + Math.round((Math.random() - 0.5) * 2);
         enemyY = p.state.y + Math.round((Math.random() - 0.5) * 2);
@@ -408,21 +685,14 @@ export class GameRoom {
       }
     }
 
-    const result: SonarResultPayload = { revealedTiles, enemyVisible, enemyX, enemyY };
+    const result: SonarResultPayload = { revealedTiles, revealedNodes, enemyVisible, enemyX, enemyY };
     player.socket?.emit('message', { type: 'SONAR_RESULT', payload: result });
-    player.socket?.emit('message', {
-      type: 'PLAYER_STATE',
-      payload: {
-        x: player.state.x, y: player.state.y,
-        resources: player.state.resources,
-        upgrades: player.state.upgrades,
-        sonarCooldownEnd: player.state.sonarCooldownEnd,
-      },
-    });
+    this.sendPlayerState(player);
   }
 
+  // --- DYNAMITE ---
+
   handleDynamite(playerId: string, tx: number, ty: number) {
-    if (this.phase !== GamePhase.DIGGING) return;
     const player = this.players.get(playerId);
     if (!player) return;
     if (!player.state.upgrades.dynamiteUnlocked) return;
@@ -440,21 +710,15 @@ export class GameRoom {
           const nx = tx + dx, ny = ty + dy;
           if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
           const tile = this.map[ny][nx];
-          if (tile.type === TileType.BEDROCK) continue;
-          if (tile.type === TileType.EMPTY) continue;
+          if (tile.type === TileType.BEDROCK || tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR) continue;
 
           const hadOre = tile.ore;
           tile.hp = 0;
           tile.type = TileType.EMPTY;
           player.state.tilesDug++;
+          if (hadOre !== OreType.NONE) this.collectOre(player.state, hadOre);
 
-          if (hadOre !== OreType.NONE) {
-            this.collectOre(player.state, hadOre);
-          }
-
-          updates.push({
-            x: nx, y: ny, hp: 0, broken: true, ore: hadOre, damageDealt: 999,
-          });
+          updates.push({ x: nx, y: ny, hp: 0, broken: true, ore: hadOre, damageDealt: 999 });
           tile.ore = OreType.NONE;
         }
       }
@@ -464,15 +728,7 @@ export class GameRoom {
 
       if (player.socket?.emit) {
         player.socket.emit('message', { type: 'TILE_BATCH_UPDATE', payload: { tiles: updates } });
-        player.socket.emit('message', {
-          type: 'PLAYER_STATE',
-          payload: {
-            x: player.state.x, y: player.state.y,
-            resources: player.state.resources,
-            upgrades: player.state.upgrades,
-            tilesDug: player.state.tilesDug,
-          },
-        });
+        this.sendPlayerState(player);
       }
 
       for (const [id, p] of this.players) {
@@ -484,26 +740,18 @@ export class GameRoom {
           });
         }
       }
-
-      this.checkCenterReached(playerId, tx, ty);
     }, BALANCE.DYNAMITE_FUSE_MS);
 
-    player.socket?.emit('message', {
-      type: 'PLAYER_STATE',
-      payload: {
-        x: player.state.x, y: player.state.y,
-        resources: player.state.resources,
-        upgrades: player.state.upgrades,
-      },
-    });
+    this.sendPlayerState(player);
   }
+
+  // --- UPGRADES ---
 
   handleUpgrade(playerId: string, upgradeId: string) {
     const player = this.players.get(playerId);
     if (!player) return;
     const s = player.state;
     const u = s.upgrades;
-
     let success = false;
 
     switch (upgradeId) {
@@ -562,21 +810,19 @@ export class GameRoom {
         break;
       }
       case 'tremor_sense': {
-        const nextLevel = u.tremorSenseLevel + 1;
-        const next = BALANCE.UPGRADES.TREMOR_SENSE.find(t => t.level === nextLevel);
+        const next = BALANCE.UPGRADES.TREMOR_SENSE.find(t => t.level === u.tremorSenseLevel + 1);
         if (next && canAfford(s.resources, next.cost as any)) {
           deductCost(s.resources, next.cost as any);
-          u.tremorSenseLevel = nextLevel;
+          u.tremorSenseLevel = next.level;
           success = true;
         }
         break;
       }
       case 'momentum': {
-        const nextLevel = u.momentumLevel + 1;
-        const next = BALANCE.UPGRADES.MOMENTUM[nextLevel];
+        const next = BALANCE.UPGRADES.MOMENTUM[u.momentumLevel + 1];
         if (next && canAfford(s.resources, next.cost as any)) {
           deductCost(s.resources, next.cost as any);
-          u.momentumLevel = nextLevel;
+          u.momentumLevel = u.momentumLevel + 1;
           success = true;
         }
         break;
@@ -591,253 +837,216 @@ export class GameRoom {
     }
   }
 
-  checkCenterReached(playerId: string, tx: number, ty: number) {
-    if (this.phase !== GamePhase.DIGGING) return;
-    const cz = BALANCE.CENTER_ZONE;
-    if (tx >= cz.x && tx < cz.x + cz.width && ty >= cz.y && ty < cz.y + cz.height) {
-      this.startEncounter(playerId);
+  // --- TREMOR ---
+
+  checkTremor(diggerId: string) {
+    const digger = this.players.get(diggerId);
+    if (!digger) return;
+
+    for (const [id, p] of this.players) {
+      if (id === diggerId) continue;
+      const now = Date.now();
+      if (now - p.lastTremorTime < BALANCE.TREMOR_DEBOUNCE_MS) continue;
+
+      const d = dist(digger.state.x, digger.state.y, p.state.x, p.state.y);
+      const dir = getDirection(p.state.x, p.state.y, digger.state.x, digger.state.y);
+      let tremor: TremorPayload | null = null;
+      const tLevel = p.state.upgrades.tremorSenseLevel;
+
+      if (d < BALANCE.TREMOR_THRESHOLDS.STRONG) {
+        tremor = {
+          intensity: 'extreme', direction: dir,
+          message: tLevel >= 3
+            ? `The ground shakes violently from the ${dir}! ${Math.round(d)} tiles away!`
+            : `The ground shakes violently from the ${dir}!`,
+        };
+      } else if (d < BALANCE.TREMOR_THRESHOLDS.MODERATE) {
+        tremor = {
+          intensity: 'strong', direction: dir,
+          message: tLevel >= 2
+            ? `Strong vibrations from the ${dir}! ~${Math.round(d)} tiles away.`
+            : `Strong vibrations from the ${dir}!`,
+        };
+      } else if (d < BALANCE.TREMOR_THRESHOLDS.FAINT) {
+        tremor = { intensity: 'moderate', direction: dir, message: `You feel vibrations from the ${dir}...` };
+      } else if (d < BALANCE.TREMOR_THRESHOLDS.NONE) {
+        tremor = { intensity: 'faint', direction: '', message: 'You feel faint vibrations...' };
+      }
+
+      if (tremor && p.socket?.emit) {
+        p.lastTremorTime = now;
+        p.socket.emit('message', { type: 'TREMOR', payload: tremor });
+      }
     }
   }
 
-  startEncounter(triggerId: string) {
-    this.phase = GamePhase.ENCOUNTER;
-    const encounterType = this.pickEncounter();
+  // --- GAME END ---
 
-    this.encounter = {
-      type: encounterType,
-      hp: 0,
-      maxHp: 0,
-      playersInZone: [triggerId],
-      damageContribution: {},
+  private endGame(winnerId: string | null, reason: string) {
+    if (this.gameOverSent) return;
+    this.gameOverSent = true;
+    this.phase = GamePhase.GAME_OVER;
+    this.clearTimers();
+
+    const elapsed = Date.now() - this.startTime;
+    const stats: GameOverPayload['stats'] = [];
+
+    for (const [id, p] of this.players) {
+      const score = this.scores[id] || 0;
+      const xp = BALANCE.XP.BASE_ROUND +
+        p.state.tilesDug * BALANCE.XP.PER_TILE +
+        p.state.nodesClaimed * BALANCE.XP.PER_NODE_CLAIMED +
+        p.state.nodesStolen * BALANCE.XP.PER_NODE_STOLEN +
+        p.state.kills * BALANCE.XP.PER_KILL +
+        score * BALANCE.XP.PER_POINT +
+        (id === winnerId ? BALANCE.XP.WIN_BONUS : 0);
+
+      stats.push({
+        playerId: id, score,
+        tilesDug: p.state.tilesDug,
+        nodesClaimed: p.state.nodesClaimed,
+        nodesStolen: p.state.nodesStolen,
+        kills: p.state.kills,
+        oreCollected: { ...p.state.resources },
+        timeMs: elapsed, xpEarned: xp,
+      });
+    }
+
+    const payload: GameOverPayload = {
+      winnerId, reason,
+      finalScores: { ...this.scores },
+      stats,
     };
-
-    let message = '';
-    switch (encounterType) {
-      case EncounterType.TREASURE_VAULT:
-        this.encounter.hp = BALANCE.ENCOUNTER.VAULT_HP;
-        this.encounter.maxHp = BALANCE.ENCOUNTER.VAULT_HP;
-        message = 'A TREASURE VAULT has been discovered in the depths!';
-        break;
-      case EncounterType.GUARDIAN:
-        this.encounter.hp = BALANCE.ENCOUNTER.GUARDIAN_HP;
-        this.encounter.maxHp = BALANCE.ENCOUNTER.GUARDIAN_HP;
-        message = 'A GUARDIAN stirs in the depths... you cannot face this alone.';
-        this.startGuardianAttacks();
-        break;
-      case EncounterType.COLLAPSE:
-        this.encounter.collapseRadius = 0;
-        message = 'THE GROUND IS COLLAPSING!';
-        this.startCollapse();
-        break;
-      case EncounterType.MIRROR:
-        this.encounter.hp = BALANCE.ENCOUNTER.MIRROR_PLAYER_HP;
-        this.encounter.maxHp = BALANCE.ENCOUNTER.MIRROR_PLAYER_HP;
-        message = 'THE MIRROR SHATTERS! Face your rival!';
-        for (const [, p] of this.players) {
-          p.state.encounterHp = BALANCE.ENCOUNTER.MIRROR_PLAYER_HP;
-        }
-        break;
-      case EncounterType.PORTAL:
-        this.encounter.portalTimeLeft = BALANCE.ENCOUNTER.PORTAL_DURATION_MS;
-        message = 'A PORTAL to the deep places opens...';
-        this.startPortalTimer();
-        break;
-    }
-
-    const payload: EncounterStartPayload = {
-      type: encounterType,
-      message,
-      hp: this.encounter.hp,
-      maxHp: this.encounter.maxHp,
-    };
-    this.broadcast({ type: 'ENCOUNTER_START', payload });
+    this.broadcast({ type: 'GAME_OVER', payload });
   }
 
-  pickEncounter(): EncounterType {
-    const weights = BALANCE.ENCOUNTER_WEIGHTS;
-    const total = Object.values(weights).reduce((a, b) => a + b, 0);
-    let r = Math.random() * total;
+  // --- BOT AI ---
 
-    for (const [key, w] of Object.entries(weights)) {
-      r -= w;
-      if (r <= 0) return key as EncounterType;
+  private startBot() {
+    let botId: string | null = null;
+    for (const [id, p] of this.players) {
+      if (!p.socket?.emit) { botId = id; break; }
     }
-    return EncounterType.TREASURE_VAULT;
-  }
+    if (!botId) return;
 
-  handleEncounterAction(playerId: string, tx?: number, ty?: number) {
-    if (this.phase !== GamePhase.ENCOUNTER || !this.encounter) return;
-    const player = this.players.get(playerId);
-    if (!player) return;
+    const bot = this.players.get(botId)!;
+    let currentTarget: OreNode | null = null;
 
-    if (player.state.knockedOut && Date.now() < player.state.knockoutEndTime) return;
-    if (player.state.knockedOut && Date.now() >= player.state.knockoutEndTime) {
-      player.state.knockedOut = false;
-      player.state.encounterHp = Math.floor(BALANCE.ENCOUNTER.PLAYER_ENCOUNTER_HP * 0.5);
-    }
-
-    const damage = getPickaxeDamage(player.state.upgrades.pickaxeLevel);
-
-    switch (this.encounter.type) {
-      case EncounterType.TREASURE_VAULT:
-      case EncounterType.GUARDIAN: {
-        if (!this.encounter.playersInZone.includes(playerId)) {
-          this.encounter.playersInZone.push(playerId);
-        }
-        this.encounter.hp -= damage;
-        this.encounter.damageContribution![playerId] =
-          (this.encounter.damageContribution![playerId] || 0) + damage;
-
-        this.broadcast({
-          type: 'ENCOUNTER_UPDATE',
-          payload: {
-            hp: Math.max(0, this.encounter.hp),
-            maxHp: this.encounter.maxHp,
-            damageContribution: this.encounter.damageContribution,
-          },
-        });
-
-        if (this.encounter.hp <= 0) {
-          this.endEncounter(playerId);
-        }
-        break;
+    this.botTimer = setInterval(() => {
+      if (this.phase !== GamePhase.DIGGING) {
+        if (this.botTimer) clearInterval(this.botTimer);
+        return;
       }
-      case EncounterType.MIRROR: {
-        for (const [id, p] of this.players) {
-          if (id === playerId) continue;
-          const reduction = BALANCE.UPGRADES.STEEL_BOOTS[p.state.upgrades.steelBootsLevel]?.reduction || 0;
-          const actualDamage = Math.ceil(damage * (1 - reduction));
-          p.state.encounterHp -= actualDamage;
+      if (bot.state.knockedOut) return;
 
-          this.broadcast({
-            type: 'MIRROR_DAMAGE',
-            payload: {
-              attackerId: playerId,
-              targetId: id,
-              damage: actualDamage,
-              targetHp: Math.max(0, p.state.encounterHp),
-            },
-          });
+      if (!currentTarget || currentTarget.ownerId === botId) {
+        currentTarget = this.pickBotTarget(botId!);
+      }
+      if (!currentTarget) return;
 
-          if (p.state.encounterHp <= 0) {
-            this.endEncounter(playerId);
-          }
-        }
-        break;
-      }
-      case EncounterType.COLLAPSE: {
-        if (tx !== undefined && ty !== undefined) {
-          this.handleDig(playerId, tx, ty);
-          if (player.state.y <= 2) {
-            this.endEncounter(playerId);
-          }
-        }
-        break;
-      }
-      case EncounterType.PORTAL: {
-        if (tx !== undefined && ty !== undefined) {
-          this.handleDig(playerId, tx, ty);
-        }
-        break;
-      }
-    }
-  }
+      const bx = bot.state.x, by = bot.state.y;
+      const d = dist(bx, by, currentTarget.x, currentTarget.y);
 
-  startGuardianAttacks() {
-    this.encounterTimer = setInterval(() => {
-      if (!this.encounter || this.encounter.type !== EncounterType.GUARDIAN) {
-        if (this.encounterTimer) clearInterval(this.encounterTimer);
+      if (d <= 2) {
+        if (currentTarget.ownerId !== botId) {
+          this.handleClaimNode(botId!, currentTarget.id);
+        }
         return;
       }
 
-      for (const pid of this.encounter.playersInZone) {
-        const p = this.players.get(pid);
-        if (!p || p.state.knockedOut) continue;
+      const dx = currentTarget.x - bx;
+      const dy = currentTarget.y - by;
+      let nx = bx, ny = by;
 
-        const reduction = BALANCE.UPGRADES.STEEL_BOOTS[p.state.upgrades.steelBootsLevel]?.reduction || 0;
-        const damage = Math.ceil(BALANCE.ENCOUNTER.GUARDIAN_ATTACK_DAMAGE * (1 - reduction));
-        p.state.encounterHp -= damage;
+      if (Math.random() < 0.15) {
+        ny += Math.random() < 0.5 ? 1 : -1;
+      } else if (Math.abs(dx) > Math.abs(dy)) {
+        nx += dx > 0 ? 1 : -1;
+      } else if (dy !== 0) {
+        ny += dy > 0 ? 1 : -1;
+      } else {
+        nx += dx > 0 ? 1 : -1;
+      }
 
-        if (p.socket?.emit) {
-          p.socket.emit('message', {
-            type: 'GUARDIAN_ATTACK',
-            payload: { damage, hp: Math.max(0, p.state.encounterHp) },
-          });
-        }
+      if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) return;
 
-        if (p.state.encounterHp <= 0) {
-          p.state.knockedOut = true;
-          p.state.knockoutEndTime = Date.now() + BALANCE.ENCOUNTER.PLAYER_KNOCKOUT_DURATION_MS;
+      const tile = this.map[ny][nx];
+      if (tile.type === TileType.BEDROCK) return;
+
+      if (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR) {
+        bot.state.x = nx;
+        bot.state.y = ny;
+      } else {
+        const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
+        tile.hp -= damage;
+        if (tile.hp <= 0) {
+          tile.hp = 0;
+          if (tile.ore !== OreType.NONE) this.collectOre(bot.state, tile.ore);
+          tile.type = TileType.EMPTY;
+          tile.ore = OreType.NONE;
+          bot.state.x = nx;
+          bot.state.y = ny;
+          bot.state.tilesDug++;
+          this.checkTremor(botId!);
         }
       }
 
-      const allKnockedOut = this.encounter.playersInZone.every(pid => {
-        const p = this.players.get(pid);
-        return p?.state.knockedOut;
-      });
-
-      if (allKnockedOut && this.encounter.playersInZone.length >= 2) {
-        this.endEncounter(null);
-      }
-    }, BALANCE.ENCOUNTER.GUARDIAN_ATTACK_INTERVAL_MS);
+      this.tryBotUpgrades(bot.state);
+    }, 400);
   }
 
-  startCollapse() {
-    const cz = BALANCE.CENTER_ZONE;
-    const centerX = cz.x + 1, centerY = cz.y + 1;
+  private pickBotTarget(botId: string): OreNode | null {
+    const bot = this.players.get(botId);
+    if (!bot) return null;
 
-    this.collapseTimer = setInterval(() => {
-      if (!this.encounter || this.encounter.type !== EncounterType.COLLAPSE) {
-        if (this.collapseTimer) clearInterval(this.collapseTimer);
-        return;
-      }
+    const unowned = this.nodes.filter(n => n.ownerId === null);
+    if (unowned.length > 0) {
+      unowned.sort((a, b) => dist(bot.state.x, bot.state.y, a.x, a.y) - dist(bot.state.x, bot.state.y, b.x, b.y));
+      return unowned[0];
+    }
 
-      this.encounter.collapseRadius = (this.encounter.collapseRadius || 0) + 1;
-      const r = this.encounter.collapseRadius;
+    const stealable = this.nodes.filter(n => n.ownerId !== null && n.ownerId !== botId);
+    if (stealable.length > 0) {
+      stealable.sort((a, b) => b.pointsPerSecond - a.pointsPerSecond);
+      return stealable[0];
+    }
 
-      const collapsedTiles: Array<{ x: number; y: number }> = [];
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.sqrt(dx * dx + dy * dy) > r) continue;
-          const nx = centerX + dx, ny = centerY + dy;
-          if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
-          if (this.map[ny][nx].type !== TileType.BEDROCK) {
-            this.map[ny][nx].type = TileType.BEDROCK;
-            this.map[ny][nx].hp = 9999;
-            collapsedTiles.push({ x: nx, y: ny });
-          }
-        }
-      }
-
-      this.broadcast({
-        type: 'COLLAPSE_UPDATE',
-        payload: { radius: r, collapsedTiles },
-      });
-
-      for (const [id, p] of this.players) {
-        const dist = distance(p.state.x, p.state.y, centerX, centerY);
-        if (dist <= r) {
-          this.endEncounter(this.getOtherPlayer(id));
-          return;
-        }
-        if (p.state.y <= 2) {
-          this.endEncounter(id);
-          return;
-        }
-      }
-
-      if (r > Math.max(BALANCE.MAP_WIDTH, BALANCE.MAP_HEIGHT)) {
-        this.endEncounter(null);
-      }
-    }, 1000 / BALANCE.ENCOUNTER.COLLAPSE_SPEED_TILES_PER_SECOND);
+    return null;
   }
 
-  startPortalTimer() {
-    setTimeout(() => {
-      if (this.encounter?.type === EncounterType.PORTAL) {
-        this.endEncounter(null);
-      }
-    }, BALANCE.ENCOUNTER.PORTAL_DURATION_MS);
+  private tryBotUpgrades(state: PlayerState) {
+    const u = state.upgrades;
+    const r = state.resources;
+
+    const pickNext = BALANCE.UPGRADES.PICKAXE.find(p => p.level === u.pickaxeLevel + 1);
+    if (pickNext && canAfford(r, pickNext.cost as any)) {
+      deductCost(r, pickNext.cost as any);
+      u.pickaxeLevel = pickNext.level;
+    }
+
+    const lanternNext = BALANCE.UPGRADES.LANTERN.find(p => p.level === u.lanternLevel + 1);
+    if (lanternNext && canAfford(r, lanternNext.cost as any)) {
+      deductCost(r, lanternNext.cost as any);
+      u.lanternLevel = lanternNext.level;
+    }
+  }
+
+  // --- HELPERS ---
+
+  private sendPlayerState(player: PlayerEntry) {
+    if (!player.socket?.emit) return;
+    player.socket.emit('message', {
+      type: 'PLAYER_STATE',
+      payload: {
+        x: player.state.x, y: player.state.y,
+        resources: player.state.resources,
+        upgrades: player.state.upgrades,
+        hp: player.state.hp, maxHp: player.state.maxHp,
+        tilesDug: player.state.tilesDug,
+        score: player.state.score,
+        sonarCooldownEnd: player.state.sonarCooldownEnd,
+      },
+    });
   }
 
   private canReach(fromX: number, fromY: number, toX: number, toY: number): boolean {
@@ -857,7 +1066,8 @@ export class GameRoom {
           if (visited.has(key)) continue;
           if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
           visited.add(key);
-          if (this.map[ny][nx].type === TileType.EMPTY) {
+          const t = this.map[ny][nx].type;
+          if (t === TileType.EMPTY || t === TileType.NODE_FLOOR) {
             queue.push({ x: nx, y: ny });
           } else if (nx === toX && ny === toY) {
             return true;
@@ -868,203 +1078,37 @@ export class GameRoom {
     return false;
   }
 
-  private moveTowardTile(player: { state: PlayerState; socket: any }, tx: number, ty: number): boolean {
+  private moveTowardTile(player: PlayerEntry, tx: number, ty: number): boolean {
     const px = player.state.x, py = player.state.y;
-
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         if (dx === 0 && dy === 0) continue;
         const nx = px + dx, ny = py + dy;
         if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
-        if (this.map[ny][nx].type !== TileType.EMPTY) continue;
-        const newDist = Math.abs(tx - nx) + Math.abs(ty - ny);
-        if (newDist <= 1) {
-          player.state.x = nx;
-          player.state.y = ny;
-          if (player.socket?.emit) {
-            player.socket.emit('message', {
-              type: 'PLAYER_STATE',
-              payload: { x: nx, y: ny, resources: player.state.resources, upgrades: player.state.upgrades, tilesDug: player.state.tilesDug },
-            });
-          }
+        const t = this.map[ny][nx].type;
+        if (t !== TileType.EMPTY && t !== TileType.NODE_FLOOR) continue;
+        if (Math.abs(tx - nx) + Math.abs(ty - ny) <= 1) {
+          player.state.x = nx; player.state.y = ny;
+          this.sendPlayerState(player);
           return true;
-        }
-      }
-    }
-
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
-        if (dx === 0 && dy === 0) continue;
-        const nx = px + dx, ny = py + dy;
-        if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) continue;
-        if (this.map[ny][nx].type === TileType.EMPTY) {
-          const oldDist = Math.abs(tx - px) + Math.abs(ty - py);
-          const newDist = Math.abs(tx - nx) + Math.abs(ty - ny);
-          if (newDist < oldDist) {
-            player.state.x = nx;
-            player.state.y = ny;
-            if (player.socket?.emit) {
-              player.socket.emit('message', {
-                type: 'PLAYER_STATE',
-                payload: { x: nx, y: ny, resources: player.state.resources, upgrades: player.state.upgrades, tilesDug: player.state.tilesDug },
-              });
-            }
-            return this.moveTowardTile(player, tx, ty);
-          }
         }
       }
     }
     return false;
   }
 
-  getOtherPlayer(playerId: string): string | null {
-    for (const [id] of this.players) {
-      if (id !== playerId) return id;
-    }
-    return null;
-  }
-
-  endEncounter(winnerId: string | null) {
-    if (this.gameOverSent) return;
-    this.gameOverSent = true;
-    this.phase = GamePhase.GAME_OVER;
-    if (this.encounterTimer) clearInterval(this.encounterTimer);
-    if (this.collapseTimer) clearInterval(this.collapseTimer);
-    if (this.botTimer) clearInterval(this.botTimer);
-
-    const encounterType = this.encounter?.type || EncounterType.TREASURE_VAULT;
-    let reason = '';
-
-    switch (encounterType) {
-      case EncounterType.TREASURE_VAULT: reason = winnerId ? 'Cracked the vault!' : 'The vault remains sealed.'; break;
-      case EncounterType.GUARDIAN: reason = winnerId ? 'Guardian defeated!' : 'The guardian prevails...'; break;
-      case EncounterType.COLLAPSE: reason = winnerId ? 'Escaped the collapse!' : 'Buried alive...'; break;
-      case EncounterType.MIRROR: reason = winnerId ? 'Victory in the mirror!' : 'Mutual destruction.'; break;
-      case EncounterType.PORTAL: reason = 'Portal closed.'; break;
-    }
-
-    const elapsed = Date.now() - this.startTime;
-    const stats: GameOverPayload['stats'] = [];
-
-    for (const [id, p] of this.players) {
-      const oreVal =
-        p.state.resources.copper * BALANCE.XP.ORE_MULTIPLIER.COPPER +
-        p.state.resources.iron * BALANCE.XP.ORE_MULTIPLIER.IRON +
-        p.state.resources.gold * BALANCE.XP.ORE_MULTIPLIER.GOLD +
-        p.state.resources.crystal * BALANCE.XP.ORE_MULTIPLIER.CRYSTAL +
-        p.state.resources.emberStone * BALANCE.XP.ORE_MULTIPLIER.EMBER_STONE;
-
-      const encBonus = BALANCE.XP.ENCOUNTER_BONUS[encounterType] || 0;
-      const xp = BALANCE.XP.BASE_ROUND + p.state.tilesDug * BALANCE.XP.PER_TILE + oreVal +
-        (id === winnerId ? encBonus : Math.floor(encBonus * 0.3));
-
-      stats.push({
-        playerId: id,
-        tilesDug: p.state.tilesDug,
-        oreCollected: { ...p.state.resources },
-        timeMs: elapsed,
-        damageDealt: this.encounter?.damageContribution?.[id] || 0,
-        xpEarned: xp,
-      });
-    }
-
-    const payload: GameOverPayload = {
-      winnerId,
-      reason,
-      encounter: encounterType,
-      stats,
-    };
-
-    this.broadcast({ type: 'GAME_OVER', payload });
-  }
-
   broadcast(msg: { type: string; payload: any }) {
     for (const [, p] of this.players) {
-      if (p.socket?.emit) {
-        p.socket.emit('message', msg);
-      }
+      if (p.socket?.emit) p.socket.emit('message', msg);
     }
   }
 
-  startBot() {
-    let botId: string | null = null;
-    for (const [id, p] of this.players) {
-      if (!p.socket?.emit) { botId = id; break; }
-    }
-    if (!botId) return;
-
-    const bot = this.players.get(botId)!;
-    const targetX = BALANCE.CENTER_ZONE.x + 1;
-    const targetY = BALANCE.CENTER_ZONE.y + 1;
-
-    this.botTimer = setInterval(() => {
-      if (this.phase !== GamePhase.DIGGING && this.phase !== GamePhase.ENCOUNTER) {
-        if (this.botTimer) clearInterval(this.botTimer);
-        return;
-      }
-
-      const bx = bot.state.x, by = bot.state.y;
-      let dx = targetX - bx, dy = targetY - by;
-
-      if (dx === 0 && dy === 0) return;
-
-      let nx = bx, ny = by;
-      const jitter = Math.random();
-      if (jitter < 0.15) {
-        ny += Math.random() < 0.5 ? 1 : -1;
-      } else if (Math.abs(dx) > Math.abs(dy)) {
-        nx += dx > 0 ? 1 : -1;
-      } else if (dy !== 0) {
-        ny += dy > 0 ? 1 : -1;
-      } else {
-        nx += dx > 0 ? 1 : -1;
-      }
-
-      if (nx < 0 || nx >= BALANCE.MAP_WIDTH || ny < 0 || ny >= BALANCE.MAP_HEIGHT) return;
-
-      const tile = this.map[ny][nx];
-      if (tile.type === TileType.BEDROCK) return;
-
-      if (tile.type === TileType.EMPTY) {
-        bot.state.x = nx;
-        bot.state.y = ny;
-      } else {
-        const damage = getPickaxeDamage(bot.state.upgrades.pickaxeLevel);
-        tile.hp -= damage;
-        if (tile.hp <= 0) {
-          tile.hp = 0;
-          if (tile.ore !== OreType.NONE) {
-            this.collectOre(bot.state, tile.ore);
-          }
-          tile.type = TileType.EMPTY;
-          tile.ore = OreType.NONE;
-          bot.state.x = nx;
-          bot.state.y = ny;
-          bot.state.tilesDug++;
-          this.checkTremor(botId!);
-          this.checkCenterReached(botId!, nx, ny);
-        }
-      }
-
-      this.tryBotUpgrades(bot.state);
-    }, 500);
-  }
-
-  tryBotUpgrades(state: PlayerState) {
-    const u = state.upgrades;
-    const r = state.resources;
-
-    const pickNext = BALANCE.UPGRADES.PICKAXE.find(p => p.level === u.pickaxeLevel + 1);
-    if (pickNext && canAfford(r, pickNext.cost as any)) {
-      deductCost(r, pickNext.cost as any);
-      u.pickaxeLevel = pickNext.level;
-    }
-
-    const lanternNext = BALANCE.UPGRADES.LANTERN.find(p => p.level === u.lanternLevel + 1);
-    if (lanternNext && canAfford(r, lanternNext.cost as any)) {
-      deductCost(r, lanternNext.cost as any);
-      u.lanternLevel = lanternNext.level;
-    }
+  private clearTimers() {
+    if (this.scoreInterval) clearInterval(this.scoreInterval);
+    if (this.veinRushTimeout) clearTimeout(this.veinRushTimeout);
+    if (this.tremorSurgeTimeout) clearTimeout(this.tremorSurgeTimeout);
+    if (this.caveInInterval) clearInterval(this.caveInInterval);
+    if (this.botTimer) clearInterval(this.botTimer);
   }
 
   removePlayer(socketId: string) {
@@ -1072,11 +1116,9 @@ export class GameRoom {
     if (this.phase !== GamePhase.GAME_OVER) {
       const remaining = Array.from(this.players.keys());
       if (remaining.length > 0 && !this.gameOverSent) {
-        this.endEncounter(remaining[0]);
+        this.endGame(remaining[0], 'Opponent disconnected');
       }
     }
-    if (this.botTimer) clearInterval(this.botTimer);
-    if (this.encounterTimer) clearInterval(this.encounterTimer);
-    if (this.collapseTimer) clearInterval(this.collapseTimer);
+    this.clearTimers();
   }
 }

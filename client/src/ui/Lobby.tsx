@@ -48,7 +48,7 @@ export function Lobby({ onJoinQueue }: LobbyProps) {
         fontSize: 10, color: '#00CED188', marginBottom: 36,
         letterSpacing: 6, textTransform: 'uppercase',
       }}>
-        Underground Racing
+        Claim &amp; Control
       </div>
 
       {/* How to play section */}
@@ -64,16 +64,16 @@ export function Lobby({ onJoinQueue }: LobbyProps) {
             HOW TO PLAY
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            <TipItem icon="&#128433;" text="Click tiles to dig toward the center" />
+            <TipItem icon="&#128433;" text="Click tiles to dig and explore" />
             <TipItem icon="&#128142;" text="Collect ore to upgrade your gear" />
-            <TipItem icon="&#127919;" text="Race your opponent to the center" />
-            <TipItem icon="&#9889;" text="Use sonar & TNT for an edge" />
+            <TipItem icon="&#127919;" text="Find hidden nodes and claim them" />
+            <TipItem icon="&#9889;" text="Steal rival nodes & fight for control" />
           </div>
           <div style={{
             fontSize: 9, color: '#555', marginTop: 12, textAlign: 'center',
             lineHeight: '16px',
           }}>
-            Reach the glowing center first to trigger the final encounter!
+            Discover ore nodes, claim them for points, and reach 500 to win!
           </div>
         </div>
       )}

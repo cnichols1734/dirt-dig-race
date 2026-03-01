@@ -8,6 +8,7 @@ export enum TileType {
   OBSIDIAN = 6,
   CRYSTAL_WALL = 7,
   BEDROCK = 8,
+  NODE_FLOOR = 9,
 }
 
 export enum OreType {
@@ -19,20 +20,30 @@ export enum OreType {
   EMBER_STONE = 5,
 }
 
-export enum EncounterType {
-  TREASURE_VAULT = 'TREASURE_VAULT',
-  GUARDIAN = 'GUARDIAN',
-  COLLAPSE = 'COLLAPSE',
-  MIRROR = 'MIRROR',
-  PORTAL = 'PORTAL',
+export enum NodeTier {
+  HOME = 'HOME',
+  MID = 'MID',
+  CORE = 'CORE',
 }
 
 export enum GamePhase {
   LOBBY = 'LOBBY',
   COUNTDOWN = 'COUNTDOWN',
   DIGGING = 'DIGGING',
-  ENCOUNTER = 'ENCOUNTER',
   GAME_OVER = 'GAME_OVER',
+}
+
+export interface OreNode {
+  id: string;
+  x: number;
+  y: number;
+  tier: NodeTier;
+  ownerId: string | null;
+  claimProgress: number;
+  claimMax: number;
+  pointsPerSecond: number;
+  supercharged: boolean;
+  discoveredBy: string[];
 }
 
 export interface Resources {
@@ -69,11 +80,18 @@ export interface PlayerState {
   y: number;
   resources: Resources;
   upgrades: UpgradeState;
-  encounterHp: number;
+  hp: number;
+  maxHp: number;
   knockedOut: boolean;
   knockoutEndTime: number;
+  respawnX: number;
+  respawnY: number;
   tilesDug: number;
   sonarCooldownEnd: number;
+  score: number;
+  nodesClaimed: number;
+  nodesStolen: number;
+  kills: number;
 }
 
 export interface GameState {
@@ -81,19 +99,11 @@ export interface GameState {
   roomId: string;
   mapSeed: number;
   players: [PlayerState, PlayerState];
-  encounter: EncounterState | null;
+  nodes: OreNode[];
+  scores: Record<string, number>;
   startTime: number;
   elapsedMs: number;
-}
-
-export interface EncounterState {
-  type: EncounterType;
-  hp: number;
-  maxHp: number;
-  playersInZone: string[];
-  collapseRadius?: number;
-  portalTimeLeft?: number;
-  damageContribution?: Record<string, number>;
+  gameDurationMs: number;
 }
 
 export interface MapConfig {
@@ -106,10 +116,11 @@ export type ClientMessageType =
   | 'JOIN_QUEUE'
   | 'LEAVE_QUEUE'
   | 'DIG'
+  | 'CLAIM_NODE'
+  | 'ATTACK'
   | 'USE_SONAR'
   | 'USE_DYNAMITE'
   | 'PURCHASE_UPGRADE'
-  | 'ENCOUNTER_ACTION'
   | 'REQUEST_REMATCH';
 
 export interface ClientMessage {
@@ -117,6 +128,7 @@ export interface ClientMessage {
   payload: {
     tileX?: number;
     tileY?: number;
+    nodeId?: string;
     upgradeId?: string;
     targetId?: string;
   };
@@ -135,16 +147,20 @@ export type ServerMessageType =
   | 'SONAR_RESULT'
   | 'SONAR_ALERT'
   | 'DYNAMITE_ALERT'
-  | 'ENCOUNTER_START'
-  | 'ENCOUNTER_UPDATE'
-  | 'ENCOUNTER_DAMAGE'
-  | 'GUARDIAN_ATTACK'
-  | 'COLLAPSE_UPDATE'
-  | 'MIRROR_DAMAGE'
-  | 'PORTAL_ENTER'
+  | 'NODE_UPDATE'
+  | 'NODE_CLAIMED'
+  | 'NODE_LOST'
+  | 'NODE_CONTESTED'
+  | 'SCORE_UPDATE'
+  | 'VEIN_RUSH'
+  | 'TREMOR_SURGE'
+  | 'PLAYER_HIT'
+  | 'PLAYER_KNOCKED_OUT'
+  | 'PLAYER_RESPAWNED'
+  | 'CAVE_IN'
   | 'GAME_OVER'
   | 'PLAYER_STATE'
-  | 'OPPONENT_TILE_UPDATE'
+  | 'OPPONENT_POSITION'
   | 'ERROR';
 
 export interface ServerMessage {
@@ -160,6 +176,8 @@ export interface MatchFoundPayload {
   spawnX: number;
   spawnY: number;
   opponentName: string;
+  nodes: OreNode[];
+  gameDurationMs: number;
 }
 
 export interface TileUpdatePayload {
@@ -179,6 +197,7 @@ export interface TremorPayload {
 
 export interface SonarResultPayload {
   revealedTiles: Array<{ x: number; y: number; type: TileType; ore: OreType }>;
+  revealedNodes: Array<{ id: string; x: number; y: number; tier: NodeTier; ownerId: string | null }>;
   enemyVisible: boolean;
   enemyX?: number;
   enemyY?: number;
@@ -189,23 +208,72 @@ export interface SonarAlertPayload {
   message: string;
 }
 
-export interface EncounterStartPayload {
-  type: EncounterType;
+export interface NodeUpdatePayload {
+  node: OreNode;
+}
+
+export interface NodeClaimedPayload {
+  nodeId: string;
+  ownerId: string;
+  tier: NodeTier;
+  pointsPerSecond: number;
+}
+
+export interface NodeContestedPayload {
+  nodeId: string;
+  attackerId: string;
+  direction: string;
+}
+
+export interface ScoreUpdatePayload {
+  scores: Record<string, number>;
+  pps: Record<string, number>;
+  timeRemainingMs: number;
+}
+
+export interface VeinRushPayload {
+  nodeId: string;
+  durationMs: number;
   message: string;
-  hp?: number;
-  maxHp?: number;
+}
+
+export interface TremorSurgePayload {
+  players: Array<{ id: string; x: number; y: number }>;
+  durationMs: number;
+}
+
+export interface PlayerHitPayload {
+  attackerId: string;
+  targetId: string;
+  damage: number;
+  targetHp: number;
+}
+
+export interface PlayerKnockedOutPayload {
+  playerId: string;
+  killerId: string;
+  respawnMs: number;
+}
+
+export interface CaveInPayload {
+  collapsedTiles: Array<{ x: number; y: number }>;
+  destroyedNodes: string[];
+  message: string;
 }
 
 export interface GameOverPayload {
   winnerId: string | null;
   reason: string;
-  encounter: EncounterType;
+  finalScores: Record<string, number>;
   stats: {
     playerId: string;
+    score: number;
     tilesDug: number;
+    nodesClaimed: number;
+    nodesStolen: number;
+    kills: number;
     oreCollected: Resources;
     timeMs: number;
-    damageDealt: number;
     xpEarned: number;
   }[];
 }
@@ -217,12 +285,9 @@ export interface PlayerProfile {
   totalOreCollected: Resources;
   roundsPlayed: number;
   roundsWon: number;
-  guardiansDefeated: number;
-  collapseSurvived: number;
-  mirrorWins: number;
-  portalsEntered: number;
-  deepestDig: number;
-  fastestVault: number;
+  totalNodesClaimed: number;
+  totalNodesStolen: number;
+  totalKills: number;
   currentRank: string;
   xp: number;
 }

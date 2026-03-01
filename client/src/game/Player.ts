@@ -24,7 +24,10 @@ export class Player {
   resources: Resources;
   upgrades: UpgradeState;
   tilesDug: number = 0;
-  encounterHp: number = 100;
+  hp: number = 50;
+  maxHp: number = 50;
+  knockedOut: boolean = false;
+  score: number = 0;
   sonarCooldownEnd: number = 0;
 
   private headlampPhase: number = 0;
@@ -33,7 +36,7 @@ export class Player {
   private isWalking: boolean = false;
   private walkTimer: number = 0;
 
-  private digAnimPhase: number = -1; // -1 = not digging
+  private digAnimPhase: number = -1;
   private digAnimSpeed: number = 12;
   private facingRight: boolean = true;
   private prevX: number = 0;
@@ -47,6 +50,9 @@ export class Player {
 
   private squashTimer: number = 0;
   private squashIntensity: number = 0;
+
+  private damageFlashTimer: number = 0;
+  private knockoutAlpha: number = 1;
 
   constructor() {
     this.container = new Container();
@@ -299,6 +305,15 @@ export class Player {
     }
   }
 
+  triggerDamageFlash() {
+    this.damageFlashTimer = 300;
+  }
+
+  setKnockedOut(ko: boolean) {
+    this.knockedOut = ko;
+    this.knockoutAlpha = ko ? 0.3 : 1;
+  }
+
   updateState(state: Partial<PlayerState>) {
     if (state.x !== undefined && state.y !== undefined) {
       this.setPosition(state.x, state.y);
@@ -306,7 +321,9 @@ export class Player {
     if (state.resources) this.resources = state.resources;
     if (state.upgrades) this.upgrades = state.upgrades;
     if (state.tilesDug !== undefined) this.tilesDug = state.tilesDug;
-    if (state.encounterHp !== undefined) this.encounterHp = state.encounterHp;
+    if ((state as any).hp !== undefined) this.hp = (state as any).hp;
+    if ((state as any).maxHp !== undefined) this.maxHp = (state as any).maxHp;
+    if ((state as any).score !== undefined) this.score = (state as any).score;
     if ((state as any).sonarCooldownEnd !== undefined) this.sonarCooldownEnd = (state as any).sonarCooldownEnd;
   }
 
@@ -386,5 +403,15 @@ export class Player {
     this.headlampBeam.alpha = lampFlicker * 0.5;
 
     this.shadow.alpha = 0.3 + Math.sin(this.headlampPhase * 0.5) * 0.05;
+
+    if (this.damageFlashTimer > 0) {
+      this.damageFlashTimer -= dt;
+      const flash = Math.sin(this.damageFlashTimer * 0.03) > 0;
+      this.body.alpha = flash ? 0.4 : 1;
+      this.body.tint = flash ? 0xFF4444 : 0xFFFFFF;
+    } else {
+      this.body.tint = 0xFFFFFF;
+      this.body.alpha = this.knockoutAlpha;
+    }
   }
 }

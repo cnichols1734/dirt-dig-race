@@ -6,7 +6,7 @@ import { UpgradeTree } from './UpgradeTree';
 import { ScoreScreen } from './ScoreScreen';
 import { TremorAlert } from './TremorAlert';
 import { SonarDisplay } from './SonarDisplay';
-import { GamePhase, Resources, UpgradeState, EncounterType, GameOverPayload, TremorPayload } from '@dig/shared';
+import { GamePhase, Resources, UpgradeState, OreNode, GameOverPayload, TremorPayload } from '@dig/shared';
 
 interface GameUIState {
   phase: GamePhase;
@@ -14,17 +14,22 @@ interface GameUIState {
   upgrades: UpgradeState;
   tilesDug: number;
   elapsedMs: number;
-  encounterType: EncounterType | null;
-  encounterHp: number;
-  encounterMaxHp: number;
-  encounterPlayerHp: number;
   countdownValue: number;
   showUpgrades: boolean;
   gameOverData: GameOverPayload | null;
   tremors: TremorPayload[];
   sonarAlerts: string[];
   dynamiteAlerts: string[];
+  nodeAlerts: string[];
   playerId: string;
+  playerIndex: number;
+  scores: Record<string, number>;
+  pps: Record<string, number>;
+  timeRemainingMs: number;
+  nodes: OreNode[];
+  playerHp: number;
+  playerMaxHp: number;
+  dugTiles: Set<string>;
 }
 
 let gameManagerInstance: GameManager | null = null;
@@ -44,17 +49,22 @@ export function App() {
     },
     tilesDug: 0,
     elapsedMs: 0,
-    encounterType: null,
-    encounterHp: 0,
-    encounterMaxHp: 0,
-    encounterPlayerHp: 100,
     countdownValue: 3,
     showUpgrades: false,
     gameOverData: null,
     tremors: [],
     sonarAlerts: [],
     dynamiteAlerts: [],
+    nodeAlerts: [],
     playerId: '',
+    playerIndex: 0,
+    scores: {},
+    pps: {},
+    timeRemainingMs: 300000,
+    nodes: [],
+    playerHp: 50,
+    playerMaxHp: 50,
+    dugTiles: new Set<string>(),
   });
 
   const timerRef = useRef<number | null>(null);
@@ -72,11 +82,19 @@ export function App() {
           setState(s => ({ ...s, countdownValue: data.count }));
           break;
         case 'gameStart':
-          setState(s => ({ ...s, phase: GamePhase.DIGGING, playerId: gm.playerId }));
+          setState(s => ({
+            ...s, phase: GamePhase.DIGGING,
+            playerId: gm.playerId, playerIndex: gm.playerIndex,
+            nodes: [...gm.nodes],
+          }));
           if (timerRef.current) window.clearInterval(timerRef.current);
           timerRef.current = window.setInterval(() => {
-            setState(s => ({ ...s, elapsedMs: gm.elapsedMs }));
-          }, 500);
+            setState(s => ({
+              ...s, elapsedMs: gm.elapsedMs,
+              nodes: [...gm.nodes],
+              dugTiles: new Set(gm.fog.revealed),
+            }));
+          }, 250);
           break;
         case 'playerState':
           setState(s => ({
@@ -84,6 +102,8 @@ export function App() {
             resources: data.resources ? { ...data.resources } : s.resources,
             upgrades: data.upgrades ? { ...data.upgrades } : s.upgrades,
             tilesDug: data.tilesDug ?? s.tilesDug,
+            playerHp: data.hp ?? s.playerHp,
+            playerMaxHp: data.maxHp ?? s.playerMaxHp,
           }));
           break;
         case 'upgradeResult':
@@ -93,16 +113,70 @@ export function App() {
             upgrades: { ...data.upgrades },
           }));
           break;
+        case 'scoreUpdate':
+          setState(s => ({
+            ...s,
+            scores: { ...data.scores },
+            pps: { ...data.pps },
+            timeRemainingMs: data.timeRemainingMs,
+          }));
+          break;
+        case 'nodeUpdate':
+        case 'nodeClaimed':
+        case 'nodeLost':
+          setState(s => ({ ...s, nodes: [...gm.nodes] }));
+          break;
+        case 'nodeContested': {
+          const msg = `Node under attack from the ${data.direction}!`;
+          setState(s => ({
+            ...s,
+            nodeAlerts: [...s.nodeAlerts, msg].slice(-2),
+          }));
+          setTimeout(() => {
+            setState(s => ({ ...s, nodeAlerts: s.nodeAlerts.slice(1) }));
+          }, 4000);
+          break;
+        }
+        case 'veinRush': {
+          const msg = data.message;
+          setState(s => ({
+            ...s,
+            nodeAlerts: [...s.nodeAlerts, msg].slice(-2),
+            nodes: [...gm.nodes],
+          }));
+          setTimeout(() => {
+            setState(s => ({ ...s, nodeAlerts: s.nodeAlerts.slice(1) }));
+          }, 5000);
+          break;
+        }
+        case 'tremorSurge': {
+          setState(s => ({
+            ...s,
+            nodeAlerts: [...s.nodeAlerts, 'TREMOR SURGE! All positions revealed!'].slice(-2),
+          }));
+          setTimeout(() => {
+            setState(s => ({ ...s, nodeAlerts: s.nodeAlerts.slice(1) }));
+          }, 3000);
+          break;
+        }
+        case 'playerHit':
+          setState(s => ({
+            ...s,
+            playerHp: data.targetId === s.playerId ? data.targetHp : s.playerHp,
+          }));
+          break;
+        case 'playerKnockedOut':
+          break;
+        case 'playerRespawned':
+          setState(s => ({ ...s, playerHp: 50, playerMaxHp: 50 }));
+          break;
         case 'tremor':
           setState(s => ({
             ...s,
             tremors: [...s.tremors, data].slice(-3),
           }));
           setTimeout(() => {
-            setState(s => ({
-              ...s,
-              tremors: s.tremors.slice(1),
-            }));
+            setState(s => ({ ...s, tremors: s.tremors.slice(1) }));
           }, 3000);
           break;
         case 'sonarAlert':
@@ -123,31 +197,10 @@ export function App() {
             setState(s => ({ ...s, dynamiteAlerts: s.dynamiteAlerts.slice(1) }));
           }, 3000);
           break;
-        case 'encounterStart':
-          setState(s => ({
-            ...s,
-            phase: GamePhase.ENCOUNTER,
-            encounterType: data.type,
-            encounterHp: data.hp || 0,
-            encounterMaxHp: data.maxHp || 0,
-          }));
-          break;
-        case 'encounterUpdate':
-          setState(s => ({
-            ...s,
-            encounterHp: data.hp,
-            encounterMaxHp: data.maxHp,
-          }));
-          break;
-        case 'guardianAttack':
-          setState(s => ({ ...s, encounterPlayerHp: data.hp }));
-          break;
         case 'gameOver':
           if (timerRef.current) window.clearInterval(timerRef.current);
           setState(s => ({
-            ...s,
-            phase: GamePhase.GAME_OVER,
-            gameOverData: data,
+            ...s, phase: GamePhase.GAME_OVER, gameOverData: data,
           }));
           break;
         case 'toggleUpgrades':
@@ -176,14 +229,9 @@ export function App() {
 
   const handlePlayAgain = useCallback(() => {
     setState(s => ({
-      ...s,
-      phase: GamePhase.LOBBY,
-      gameOverData: null,
-      showUpgrades: false,
-      tremors: [],
-      sonarAlerts: [],
-      dynamiteAlerts: [],
-      encounterType: null,
+      ...s, phase: GamePhase.LOBBY, gameOverData: null,
+      showUpgrades: false, tremors: [], sonarAlerts: [],
+      dynamiteAlerts: [], nodeAlerts: [], scores: {}, pps: {},
     }));
   }, []);
 
@@ -203,52 +251,43 @@ export function App() {
           background: 'rgba(0,0,0,0.75)', zIndex: 100,
           pointerEvents: 'auto' as const,
         }}>
-          <div style={{
-            fontSize: 14, color: '#00CED188', marginBottom: 16,
-            letterSpacing: 4,
-          }}>
+          <div style={{ fontSize: 14, color: '#00CED188', marginBottom: 16, letterSpacing: 4 }}>
             GET READY
           </div>
           <div style={{
             fontSize: state.countdownValue > 0 ? 96 : 72,
             color: state.countdownValue > 0 ? '#00CED1' : '#FFD700',
-            textShadow: state.countdownValue > 0
-              ? '0 0 30px #00CED1, 0 0 60px rgba(0,206,209,0.4)'
-              : '0 0 30px #FFD700, 0 0 60px rgba(255,215,0,0.4)',
+            textShadow: '0 0 30px currentColor',
             fontWeight: 'bold',
-            animation: 'countPop 0.5s ease-out',
           }}>
-            {state.countdownValue > 0 ? state.countdownValue : 'DIG!'}
+            {state.countdownValue > 0 ? state.countdownValue : 'CLAIM!'}
           </div>
           {state.countdownValue <= 0 && (
             <div style={{ fontSize: 10, color: '#FFD70088', marginTop: 12, letterSpacing: 2 }}>
-              Race to the center!
+              Explore, discover nodes, claim territory!
             </div>
           )}
-          <style>{`
-            @keyframes countPop {
-              from { transform: scale(1.5); opacity: 0; }
-              to { transform: scale(1); opacity: 1; }
-            }
-          `}</style>
         </div>
       )}
 
-      {(state.phase === GamePhase.DIGGING || state.phase === GamePhase.ENCOUNTER) && (
+      {state.phase === GamePhase.DIGGING && (
         <>
           <HUD
             resources={state.resources}
             upgrades={state.upgrades}
             tilesDug={state.tilesDug}
-            elapsedMs={state.elapsedMs}
-            encounterType={state.encounterType}
-            encounterHp={state.encounterHp}
-            encounterMaxHp={state.encounterMaxHp}
-            encounterPlayerHp={state.encounterPlayerHp}
+            scores={state.scores}
+            pps={state.pps}
+            timeRemainingMs={state.timeRemainingMs}
+            playerId={state.playerId}
+            nodes={state.nodes}
+            playerHp={state.playerHp}
+            playerMaxHp={state.playerMaxHp}
+            dugTiles={state.dugTiles}
             onToggleUpgrades={() => setState(s => ({ ...s, showUpgrades: !s.showUpgrades }))}
           />
 
-          <TremorAlert tremors={state.tremors} sonarAlerts={state.sonarAlerts} dynamiteAlerts={state.dynamiteAlerts} />
+          <TremorAlert tremors={state.tremors} sonarAlerts={state.sonarAlerts} dynamiteAlerts={[...state.dynamiteAlerts, ...state.nodeAlerts]} />
           <SonarDisplay />
 
           {state.showUpgrades && (

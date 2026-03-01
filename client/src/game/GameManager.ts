@@ -1,5 +1,5 @@
-import { Application, Container, Graphics, Text } from 'pixi.js';
-import { GamePhase, TileType, OreType, EncounterType } from '@dig/shared';
+import { Application, Container } from 'pixi.js';
+import { GamePhase, TileType, OreType, OreNode } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
 import { SCALED_TILE } from '../utils/constants';
 import { GameMap } from './Map';
@@ -32,24 +32,18 @@ export class GameManager {
 
   phase: GamePhase = GamePhase.LOBBY;
   playerId: string = '';
+  playerIndex: number = 0;
   roomId: string = '';
   mapSeed: number = 0;
   startTime: number = 0;
   elapsedMs: number = 0;
   countdownValue: number = 3;
 
-  private centerIndicator: Container;
-  private centerArrow: Graphics;
-  private centerDistText: Text;
-  private centerBeacon: Graphics;
-  private beaconPhase: number = 0;
-
-  private opponentIndicator: Container;
-  private opponentArrow: Graphics;
-  private opponentDot: Graphics;
-  private lastKnownOpponentX: number = -1;
-  private lastKnownOpponentY: number = -1;
-  private opponentIndicatorLife: number = 0;
+  nodes: OreNode[] = [];
+  scores: Record<string, number> = {};
+  pps: Record<string, number> = {};
+  timeRemainingMs: number = 0;
+  gameDurationMs: number = BALANCE.SCORING.GAME_DURATION_MS;
 
   private eventCallbacks: Set<GameEventCallback> = new Set();
   private lastClickTime: number = 0;
@@ -75,6 +69,7 @@ export class GameManager {
     this.app.stage.addChild(this.uiContainer);
 
     this.worldContainer.addChild(this.gameMap.container);
+    this.worldContainer.addChild(this.gameMap.nodeContainer);
     this.worldContainer.addChild(this.sonar.container);
     this.worldContainer.addChild(this.player.container);
     this.worldContainer.addChild(this.combat.container);
@@ -82,34 +77,6 @@ export class GameManager {
     this.worldContainer.addChild(this.particles.container);
     this.worldContainer.addChild(this.fog.container);
     this.uiContainer.addChild(this.juice.container);
-
-    this.centerBeacon = new Graphics();
-    this.worldContainer.addChild(this.centerBeacon);
-
-    this.centerIndicator = new Container();
-    this.centerArrow = new Graphics();
-    this.centerDistText = new Text({
-      text: '',
-      style: {
-        fontFamily: '"Press Start 2P", monospace',
-        fontSize: 10,
-        fill: 0x00CED1,
-        stroke: { color: 0x000000, width: 3 },
-      },
-    });
-    this.centerDistText.anchor.set(0.5, 0);
-    this.centerIndicator.addChild(this.centerArrow);
-    this.centerIndicator.addChild(this.centerDistText);
-    this.centerIndicator.visible = false;
-    this.uiContainer.addChild(this.centerIndicator);
-
-    this.opponentIndicator = new Container();
-    this.opponentArrow = new Graphics();
-    this.opponentDot = new Graphics();
-    this.opponentIndicator.addChild(this.opponentArrow);
-    this.opponentIndicator.addChild(this.opponentDot);
-    this.opponentIndicator.visible = false;
-    this.uiContainer.addChild(this.opponentIndicator);
 
     this.camera.setScreenSize(app.screen.width, app.screen.height);
 
@@ -119,26 +86,18 @@ export class GameManager {
     this.initialized = true;
   }
 
-  onEvent(cb: GameEventCallback) {
-    this.eventCallbacks.add(cb);
-  }
-
-  offEvent(cb: GameEventCallback) {
-    this.eventCallbacks.delete(cb);
-  }
+  onEvent(cb: GameEventCallback) { this.eventCallbacks.add(cb); }
+  offEvent(cb: GameEventCallback) { this.eventCallbacks.delete(cb); }
 
   private emit(event: string, data: any = {}) {
-    for (const cb of this.eventCallbacks) {
-      cb(event, data);
-    }
+    for (const cb of this.eventCallbacks) cb(event, data);
   }
 
   private setupInput() {
     const canvas = this.app.canvas;
 
     canvas.addEventListener('click', (e: MouseEvent) => {
-      if (this.phase !== GamePhase.DIGGING && this.phase !== GamePhase.ENCOUNTER) return;
-
+      if (this.phase !== GamePhase.DIGGING) return;
       audioManager.init();
 
       const now = Date.now();
@@ -156,25 +115,12 @@ export class GameManager {
       const world = this.camera.screenToWorld(sx, sy);
       const tilePos = this.gameMap.worldToTile(world.x, world.y);
 
-      if (this.phase === GamePhase.ENCOUNTER && this.combat.active) {
-        if (this.combat.encounterType === EncounterType.COLLAPSE) {
-          socketManager.send({ type: 'ENCOUNTER_ACTION', payload: { tileX: tilePos.x, tileY: tilePos.y } });
-        } else if (this.combat.encounterType === EncounterType.PORTAL) {
-          socketManager.send({ type: 'ENCOUNTER_ACTION', payload: { tileX: tilePos.x, tileY: tilePos.y } });
-        } else {
-          socketManager.send({ type: 'ENCOUNTER_ACTION', payload: {} });
-          const cz = BALANCE.CENTER_ZONE;
-          const cwx = (cz.x + cz.width / 2) * SCALED_TILE;
-          const cwy = (cz.y + cz.height / 2) * SCALED_TILE;
-          this.particles.digDust(cwx, cwy, TileType.CRYSTAL_WALL);
-          this.camera.shake(3, 80);
-          this.player.triggerDig(cz.x + 1, cz.y + 1);
-          audioManager.playDig(TileType.CRYSTAL_WALL);
-        }
+      const node = this.gameMap.getNodeAtTile(tilePos.x, tilePos.y, this.nodes);
+      if (node) {
+        socketManager.send({ type: 'CLAIM_NODE', payload: { nodeId: node.id } });
         return;
       }
 
-      this.player.triggerDig(tilePos.x, tilePos.y);
       socketManager.send({ type: 'DIG', payload: { tileX: tilePos.x, tileY: tilePos.y } });
     });
 
@@ -186,10 +132,13 @@ export class GameManager {
       }
       if (e.key === 'e' || e.key === 'E') {
         if (this.phase === GamePhase.DIGGING) {
-          const tx = this.player.x;
-          const ty = this.player.y;
-          socketManager.send({ type: 'USE_DYNAMITE', payload: { tileX: tx, tileY: ty } });
+          socketManager.send({ type: 'USE_DYNAMITE', payload: { tileX: this.player.x, tileY: this.player.y } });
           audioManager.playDynamiteFuse();
+        }
+      }
+      if (e.key === 'f' || e.key === 'F') {
+        if (this.phase === GamePhase.DIGGING) {
+          socketManager.send({ type: 'ATTACK', payload: {} });
         }
       }
       if (e.key === 'u' || e.key === 'U') {
@@ -211,12 +160,18 @@ export class GameManager {
         case 'MATCH_FOUND': {
           const p = msg.payload;
           this.playerId = p.playerId;
+          this.playerIndex = p.playerIndex;
           this.roomId = p.roomId;
           this.mapSeed = p.mapSeed;
+          this.nodes = p.nodes;
+          this.gameDurationMs = p.gameDurationMs;
+          this.timeRemainingMs = p.gameDurationMs;
           this.phase = GamePhase.COUNTDOWN;
 
           this.gameMap.generate(p.mapSeed);
           this.gameMap.buildSprites();
+          this.gameMap.setLocalPlayerId(this.playerId);
+          this.gameMap.buildNodeSprites(this.nodes, this.playerIndex);
 
           this.player.setPosition(p.spawnX, p.spawnY);
           this.camera.lookAt(p.spawnX, p.spawnY);
@@ -226,8 +181,6 @@ export class GameManager {
           this.revealSpawnArea(p.spawnX, p.spawnY);
           this.lighting.updateLantern(p.spawnX, p.spawnY, 1);
           this.lighting.updateOreGlows(this.gameMap.tiles, this.fog.revealed);
-
-          this.drawCenterBeacon();
 
           this.emit('matchFound', { opponentName: p.opponentName });
           break;
@@ -243,7 +196,6 @@ export class GameManager {
           this.phase = GamePhase.DIGGING;
           this.startTime = Date.now();
           audioManager.init();
-          this.centerIndicator.visible = true;
           this.emit('gameStart', {});
           break;
         }
@@ -264,7 +216,6 @@ export class GameManager {
             this.camera.microZoom(0.02, 200);
             this.juice.freezeFrame(33);
             this.lighting.flashBreak(wx, wy);
-            this.player.triggerImpact();
             audioManager.playBreak(prevType, this.player.x);
 
             this.fog.revealAround(t.x, t.y, this.player.upgrades.lanternLevel);
@@ -314,16 +265,8 @@ export class GameManager {
           break;
         }
 
-        case 'RESOURCE_UPDATE': {
-          this.player.resources = msg.payload;
-          this.emit('resourceUpdate', msg.payload);
-          break;
-        }
-
         case 'UPGRADE_RESULT': {
-          if (msg.payload.success) {
-            audioManager.playUpgrade();
-          }
+          if (msg.payload.success) audioManager.playUpgrade();
           this.player.upgrades = msg.payload.upgrades;
           this.player.resources = msg.payload.resources;
           this.emit('upgradeResult', msg.payload);
@@ -334,11 +277,6 @@ export class GameManager {
           this.particles.tremorShake();
           this.camera.shake(3, 300);
           audioManager.playTremor();
-
-          const dir = msg.payload.direction;
-          if (dir) {
-            this.showOpponentDirection(dir);
-          }
           this.emit('tremor', msg.payload);
           break;
         }
@@ -352,7 +290,6 @@ export class GameManager {
           this.sonar.ping(px, py);
           this.particles.sonarPulse(wx, wy, BALANCE.SONAR_RADIUS);
           audioManager.playSonar();
-
           this.fog.sonarReveal(sr.revealedTiles, BALANCE.SONAR_DURATION_MS);
 
           if (sr.enemyVisible && sr.enemyX !== undefined && sr.enemyY !== undefined) {
@@ -361,9 +298,6 @@ export class GameManager {
               sr.enemyX * SCALED_TILE + SCALED_TILE / 2,
               sr.enemyY * SCALED_TILE + SCALED_TILE / 2,
             );
-            this.lastKnownOpponentX = sr.enemyX;
-            this.lastKnownOpponentY = sr.enemyY;
-            this.opponentIndicatorLife = 5000;
           }
           break;
         }
@@ -381,49 +315,158 @@ export class GameManager {
           break;
         }
 
-        case 'ENCOUNTER_START': {
-          this.phase = GamePhase.ENCOUNTER;
-          const es = msg.payload;
-          this.combat.startEncounter(es.type, es.hp || 0, es.maxHp || 0);
-          audioManager.playEncounterReveal();
-          this.camera.shake(10, 500);
-          this.juice.flash(0xFFFFFF, 0.3, 300);
-          this.centerIndicator.visible = false;
-          this.emit('encounterStart', es);
+        case 'NODE_UPDATE': {
+          const nodeData = msg.payload.node;
+          const idx = this.nodes.findIndex(n => n.id === nodeData.id);
+          if (idx >= 0) {
+            this.nodes[idx] = nodeData;
+          } else {
+            this.nodes.push(nodeData);
+          }
+          this.gameMap.updateNodes(this.nodes, this.playerIndex);
+          this.emit('nodeUpdate', nodeData);
           break;
         }
 
-        case 'ENCOUNTER_UPDATE': {
-          this.combat.updateHp(msg.payload.hp, msg.payload.maxHp);
-          this.emit('encounterUpdate', msg.payload);
+        case 'NODE_CLAIMED': {
+          const nc = msg.payload;
+          let node = this.nodes.find(n => n.id === nc.nodeId);
+          if (node) {
+            node.ownerId = nc.ownerId;
+            node.claimProgress = node.claimMax;
+          }
+          this.gameMap.updateNodes(this.nodes, this.playerIndex);
+
+          if (nc.ownerId === this.playerId) {
+            this.juice.flash(0x4488FF, 0.2, 200);
+            audioManager.playOreCollect(OreType.CRYSTAL);
+          } else {
+            this.juice.flash(0xFF4444, 0.15, 200);
+          }
+          this.emit('nodeClaimed', nc);
           break;
         }
 
-        case 'GUARDIAN_ATTACK': {
-          this.camera.shake(8, 300);
-          this.juice.flash(0xFF0000, 0.3, 200);
-          audioManager.playGuardianAttack();
-          this.player.encounterHp = msg.payload.hp;
-          this.emit('guardianAttack', msg.payload);
+        case 'NODE_CONTESTED': {
+          this.camera.shake(3, 200);
+          this.emit('nodeContested', msg.payload);
           break;
         }
 
-        case 'MIRROR_DAMAGE': {
-          this.camera.shake(4, 150);
-          this.emit('mirrorDamage', msg.payload);
+        case 'NODE_LOST': {
+          const nl = msg.payload;
+          const node = this.nodes.find(n => n.id === nl.nodeId);
+          if (node) {
+            node.ownerId = null;
+            node.claimProgress = 0;
+          }
+          this.gameMap.updateNodes(this.nodes, this.playerIndex);
+          this.emit('nodeLost', nl);
           break;
         }
 
-        case 'COLLAPSE_UPDATE': {
-          const cu = msg.payload;
-          this.camera.shake(5, 200);
-          for (const ct of cu.collapsedTiles) {
+        case 'SCORE_UPDATE': {
+          this.scores = msg.payload.scores;
+          this.pps = msg.payload.pps;
+          this.timeRemainingMs = msg.payload.timeRemainingMs;
+          this.emit('scoreUpdate', msg.payload);
+          break;
+        }
+
+        case 'VEIN_RUSH': {
+          const vr = msg.payload;
+          const node = this.nodes.find(n => n.id === vr.nodeId);
+          if (node) {
+            node.supercharged = true;
+            const wx = node.x * SCALED_TILE + SCALED_TILE / 2;
+            const wy = node.y * SCALED_TILE + SCALED_TILE / 2;
+            this.particles.treasureBurst(wx, wy);
+          }
+          this.gameMap.updateNodes(this.nodes, this.playerIndex);
+          this.juice.flash(0xFFD700, 0.2, 300);
+          this.camera.shake(5, 300);
+          this.emit('veinRush', vr);
+          break;
+        }
+
+        case 'TREMOR_SURGE': {
+          const ts = msg.payload;
+          this.juice.flash(0xFFFFFF, 0.15, 200);
+          this.camera.shake(6, 400);
+          for (const p of ts.players) {
+            if (p.id !== this.playerId) {
+              const wx = p.x * SCALED_TILE + SCALED_TILE / 2;
+              const wy = p.y * SCALED_TILE + SCALED_TILE / 2;
+              this.combat.showOpponent(wx, wy, 50, 50);
+              this.sonar.showEnemyBlip(p.x, p.y);
+              setTimeout(() => this.combat.hideOpponent(), ts.durationMs);
+            }
+          }
+          this.emit('tremorSurge', ts);
+          break;
+        }
+
+        case 'PLAYER_HIT': {
+          const ph = msg.payload;
+          if (ph.targetId === this.playerId) {
+            this.player.hp = ph.targetHp;
+            this.player.triggerDamageFlash();
+            this.camera.shake(6, 200);
+            this.juice.flash(0xFF0000, 0.25, 150);
+          }
+          this.juice.spawnDamageNumber(
+            this.player.x * SCALED_TILE + SCALED_TILE / 2,
+            this.player.y * SCALED_TILE - 10,
+            ph.damage,
+            ph.targetId === this.playerId ? 0xFF4444 : 0xFFFFFF,
+          );
+          this.emit('playerHit', ph);
+          break;
+        }
+
+        case 'PLAYER_KNOCKED_OUT': {
+          const ko = msg.payload;
+          if (ko.playerId === this.playerId) {
+            this.player.setKnockedOut(true);
+            this.combat.showKnockout(ko.respawnMs);
+            this.camera.shake(12, 500);
+            this.juice.flash(0xFF0000, 0.4, 400);
+          }
+          this.emit('playerKnockedOut', ko);
+          break;
+        }
+
+        case 'PLAYER_RESPAWNED': {
+          const pr = msg.payload;
+          if (pr.playerId === this.playerId) {
+            this.player.setKnockedOut(false);
+            this.player.hp = BALANCE.COMBAT.PLAYER_HP;
+            this.combat.clearKnockout();
+            this.juice.flash(0x4488FF, 0.2, 200);
+          }
+          this.emit('playerRespawned', pr);
+          break;
+        }
+
+        case 'OPPONENT_POSITION': {
+          const op = msg.payload;
+          const wx = op.x * SCALED_TILE + SCALED_TILE / 2;
+          const wy = op.y * SCALED_TILE + SCALED_TILE / 2;
+          this.combat.showOpponent(wx, wy, op.hp || 50, op.maxHp || 50);
+          break;
+        }
+
+        case 'CAVE_IN': {
+          const ci = msg.payload;
+          this.camera.shake(8, 400);
+          for (const ct of ci.collapsedTiles) {
             this.gameMap.updateTile(ct.x, ct.y, 9999, false);
             const wx = ct.x * SCALED_TILE + SCALED_TILE / 2;
             const wy = ct.y * SCALED_TILE + SCALED_TILE / 2;
             this.particles.collapseDust(wx, wy);
           }
-          this.emit('collapseUpdate', cu);
+          this.gameMap.updateNodes(this.nodes, this.playerIndex);
+          this.emit('caveIn', ci);
           break;
         }
 
@@ -435,9 +478,7 @@ export class GameManager {
           } else {
             audioManager.playDefeat();
           }
-          this.combat.endEncounter();
-          this.centerIndicator.visible = false;
-          this.opponentIndicator.visible = false;
+          this.combat.clearKnockout();
           this.emit('gameOver', go);
           break;
         }
@@ -448,152 +489,6 @@ export class GameManager {
         }
       }
     });
-  }
-
-  private showOpponentDirection(direction: string) {
-    const dirMap: Record<string, [number, number]> = {
-      'north': [0, -1], 'south': [0, 1],
-      'east': [1, 0], 'west': [-1, 0],
-      'northeast': [1, -1], 'northwest': [-1, -1],
-      'southeast': [1, 1], 'southwest': [-1, 1],
-    };
-    const dir = dirMap[direction.toLowerCase()];
-    if (!dir) return;
-
-    const estimatedDist = 15;
-    this.lastKnownOpponentX = this.player.x + dir[0] * estimatedDist;
-    this.lastKnownOpponentY = this.player.y + dir[1] * estimatedDist;
-    this.opponentIndicatorLife = 4000;
-  }
-
-  private drawCenterBeacon() {
-    const cz = BALANCE.CENTER_ZONE;
-    const cx = (cz.x + cz.width / 2) * SCALED_TILE;
-    const cy = (cz.y + cz.height / 2) * SCALED_TILE;
-    this.centerBeacon.x = cx;
-    this.centerBeacon.y = cy;
-  }
-
-  private updateCenterBeacon(dt: number) {
-    this.beaconPhase += dt * 0.003;
-    this.centerBeacon.clear();
-
-    const pulse = 0.5 + Math.sin(this.beaconPhase) * 0.3;
-    const pulse2 = 0.5 + Math.sin(this.beaconPhase * 1.3 + 1) * 0.3;
-
-    for (let i = 3; i >= 0; i--) {
-      const r = (i + 1) * 20 + Math.sin(this.beaconPhase + i) * 5;
-      this.centerBeacon.circle(0, 0, r);
-      this.centerBeacon.fill({ color: 0x00CED1, alpha: (0.03 + pulse * 0.02) * (1 - i * 0.2) });
-    }
-
-    this.centerBeacon.circle(0, 0, 8 + Math.sin(this.beaconPhase * 2) * 2);
-    this.centerBeacon.fill({ color: 0x00CED1, alpha: 0.15 + pulse2 * 0.1 });
-
-    const rays = 6;
-    for (let i = 0; i < rays; i++) {
-      const angle = (i / rays) * Math.PI * 2 + this.beaconPhase * 0.5;
-      const len = 30 + Math.sin(this.beaconPhase * 2 + i) * 10;
-      this.centerBeacon.moveTo(0, 0);
-      this.centerBeacon.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
-      this.centerBeacon.stroke({ color: 0x00CED1, width: 1, alpha: 0.08 + pulse * 0.05 });
-    }
-  }
-
-  private updateCenterIndicator() {
-    if (this.phase !== GamePhase.DIGGING) return;
-
-    const cz = BALANCE.CENTER_ZONE;
-    const centerTileX = cz.x + cz.width / 2;
-    const centerTileY = cz.y + cz.height / 2;
-
-    const dx = centerTileX - this.player.x;
-    const dy = centerTileY - this.player.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-
-    const centerScreenX = this.camera.screenWidth / 2 + (centerTileX * SCALED_TILE + SCALED_TILE / 2 - this.camera.currentX) * this.camera.zoom;
-    const centerScreenY = this.camera.screenHeight / 2 + (centerTileY * SCALED_TILE + SCALED_TILE / 2 - this.camera.currentY) * this.camera.zoom;
-
-    const margin = 60;
-    const onScreen = centerScreenX > margin && centerScreenX < this.camera.screenWidth - margin &&
-                     centerScreenY > margin && centerScreenY < this.camera.screenHeight - margin;
-
-    if (onScreen && dist < 8) {
-      this.centerIndicator.visible = false;
-      return;
-    }
-
-    this.centerIndicator.visible = true;
-
-    const angle = Math.atan2(dy, dx);
-    const edgeMargin = 50;
-    const hw = this.camera.screenWidth / 2 - edgeMargin;
-    const hh = this.camera.screenHeight / 2 - edgeMargin;
-
-    let indicatorX = this.camera.screenWidth / 2 + Math.cos(angle) * hw;
-    let indicatorY = this.camera.screenHeight / 2 + Math.sin(angle) * hh;
-
-    indicatorX = Math.max(edgeMargin, Math.min(this.camera.screenWidth - edgeMargin, indicatorX));
-    indicatorY = Math.max(edgeMargin, Math.min(this.camera.screenHeight - edgeMargin, indicatorY));
-
-    this.centerIndicator.x = indicatorX;
-    this.centerIndicator.y = indicatorY;
-
-    this.centerArrow.clear();
-    const arrowSize = 12;
-    this.centerArrow.moveTo(Math.cos(angle) * arrowSize, Math.sin(angle) * arrowSize);
-    this.centerArrow.lineTo(Math.cos(angle + 2.5) * arrowSize * 0.7, Math.sin(angle + 2.5) * arrowSize * 0.7);
-    this.centerArrow.lineTo(Math.cos(angle - 2.5) * arrowSize * 0.7, Math.sin(angle - 2.5) * arrowSize * 0.7);
-    this.centerArrow.closePath();
-    this.centerArrow.fill({ color: 0x00CED1, alpha: 0.8 });
-
-    this.centerArrow.circle(0, 0, 4);
-    this.centerArrow.fill({ color: 0x00CED1, alpha: 0.5 });
-
-    this.centerDistText.text = `${Math.round(dist)}`;
-    this.centerDistText.y = 16;
-  }
-
-  private updateOpponentIndicator(dt: number) {
-    if (this.opponentIndicatorLife <= 0 || this.lastKnownOpponentX < 0) {
-      this.opponentIndicator.visible = false;
-      return;
-    }
-
-    this.opponentIndicatorLife -= dt;
-    this.opponentIndicator.visible = true;
-
-    const dx = this.lastKnownOpponentX - this.player.x;
-    const dy = this.lastKnownOpponentY - this.player.y;
-    const angle = Math.atan2(dy, dx);
-
-    const edgeMargin = 50;
-    const hw = this.camera.screenWidth / 2 - edgeMargin;
-    const hh = this.camera.screenHeight / 2 - edgeMargin;
-
-    let indicatorX = this.camera.screenWidth / 2 + Math.cos(angle) * hw;
-    let indicatorY = this.camera.screenHeight / 2 + Math.sin(angle) * hh;
-
-    indicatorX = Math.max(edgeMargin, Math.min(this.camera.screenWidth - edgeMargin, indicatorX));
-    indicatorY = Math.max(edgeMargin, Math.min(this.camera.screenHeight - edgeMargin, indicatorY));
-
-    this.opponentIndicator.x = indicatorX;
-    this.opponentIndicator.y = indicatorY;
-
-    const fadeAlpha = Math.min(1, this.opponentIndicatorLife / 1000);
-    const pulse = 0.6 + Math.sin(Date.now() * 0.008) * 0.4;
-
-    this.opponentArrow.clear();
-    const arrowSize = 10;
-    this.opponentArrow.moveTo(Math.cos(angle) * arrowSize, Math.sin(angle) * arrowSize);
-    this.opponentArrow.lineTo(Math.cos(angle + 2.5) * arrowSize * 0.7, Math.sin(angle + 2.5) * arrowSize * 0.7);
-    this.opponentArrow.lineTo(Math.cos(angle - 2.5) * arrowSize * 0.7, Math.sin(angle - 2.5) * arrowSize * 0.7);
-    this.opponentArrow.closePath();
-    this.opponentArrow.fill({ color: 0xFF4444, alpha: 0.7 * fadeAlpha * pulse });
-
-    this.opponentDot.clear();
-    this.opponentDot.circle(0, 0, 3);
-    this.opponentDot.fill({ color: 0xFF4444, alpha: 0.5 * fadeAlpha });
   }
 
   joinQueue() {
@@ -621,10 +516,11 @@ export class GameManager {
         return;
       }
 
-      if (this.phase === GamePhase.DIGGING || this.phase === GamePhase.ENCOUNTER) {
+      if (this.phase === GamePhase.DIGGING) {
         this.elapsedMs = Date.now() - this.startTime;
-
         this.player.update(dt);
+        this.gameMap.update(dt);
+        this.gameMap.updateNodes(this.nodes, this.playerIndex);
 
         const px = this.player.x * SCALED_TILE + SCALED_TILE / 2;
         const py = this.player.y * SCALED_TILE + SCALED_TILE / 2;
@@ -642,17 +538,6 @@ export class GameManager {
             );
           }
         }
-
-        if (this.combat.active && this.combat.encounterType === EncounterType.GUARDIAN) {
-          const cz = BALANCE.CENTER_ZONE;
-          const cwx = (cz.x + cz.width / 2) * SCALED_TILE;
-          const cwy = (cz.y + cz.height / 2) * SCALED_TILE;
-          this.particles.guardianAura(cwx, cwy);
-        }
-
-        this.updateCenterBeacon(dt);
-        this.updateCenterIndicator();
-        this.updateOpponentIndicator(dt);
       }
 
       this.camera.update(dt);
@@ -667,7 +552,6 @@ export class GameManager {
 
   private revealSpawnArea(sx: number, sy: number) {
     this.fog.revealAround(sx, sy, 3);
-
     const visited = new Set<string>();
     const queue: Array<{ x: number; y: number }> = [{ x: sx, y: sy }];
     visited.add(`${sx},${sy}`);
@@ -685,7 +569,7 @@ export class GameManager {
           if (nx < 0 || nx >= this.gameMap.width || ny < 0 || ny >= this.gameMap.height) continue;
           visited.add(key);
           const tile = this.gameMap.getTile(nx, ny);
-          if (tile && tile.type === TileType.EMPTY) {
+          if (tile && (tile.type === TileType.EMPTY || tile.type === TileType.NODE_FLOOR)) {
             queue.push({ x: nx, y: ny });
           }
         }
@@ -697,10 +581,14 @@ export class GameManager {
     return {
       phase: this.phase,
       playerId: this.playerId,
+      playerIndex: this.playerIndex,
       player: this.player,
       elapsedMs: this.elapsedMs,
       countdownValue: this.countdownValue,
-      combat: this.combat,
+      nodes: this.nodes,
+      scores: this.scores,
+      pps: this.pps,
+      timeRemainingMs: this.timeRemainingMs,
     };
   }
 }

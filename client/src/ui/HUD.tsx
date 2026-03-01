@@ -1,352 +1,226 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Resources, UpgradeState, EncounterType } from '@dig/shared';
-import { formatTime } from '../utils/helpers';
+import React from 'react';
+import { Resources, UpgradeState, OreNode, NodeTier } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
+import { formatTime } from '../utils/helpers';
 
 interface HUDProps {
   resources: Resources;
   upgrades: UpgradeState;
   tilesDug: number;
-  elapsedMs: number;
-  encounterType: EncounterType | null;
-  encounterHp: number;
-  encounterMaxHp: number;
-  encounterPlayerHp: number;
+  scores: Record<string, number>;
+  pps: Record<string, number>;
+  timeRemainingMs: number;
+  playerId: string;
+  nodes: OreNode[];
+  playerHp: number;
+  playerMaxHp: number;
+  dugTiles: Set<string>;
   onToggleUpgrades: () => void;
 }
 
 const oreColors: Record<string, string> = {
-  copper: '#D2691E',
-  iron: '#4682B4',
-  gold: '#FFD700',
-  crystal: '#00CED1',
-  emberStone: '#FF4500',
+  copper: '#D2691E', iron: '#4682B4', gold: '#FFD700',
+  crystal: '#00CED1', emberStone: '#FF4500',
 };
-
 const oreLabels: Record<string, string> = {
-  copper: 'Cu',
-  iron: 'Fe',
-  gold: 'Au',
-  crystal: 'Cr',
-  emberStone: 'Em',
+  copper: 'Cu', iron: 'Fe', gold: 'Au', crystal: 'Cr', emberStone: 'Em',
 };
-
-const oreIcons: Record<string, string> = {
-  copper: '🟤',
-  iron: '🔵',
-  gold: '🟡',
-  crystal: '💎',
-  emberStone: '🔥',
-};
-
-function Minimap() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animRef = useRef<number>(0);
-
-  const draw = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    const gm = (window as any).__game;
-    if (!gm || !gm.gameMap || !gm.gameMap.tiles || gm.gameMap.tiles.length === 0) return;
-
-    const W = BALANCE.MAP_WIDTH;
-    const H = BALANCE.MAP_HEIGHT;
-    const scale = 3;
-    canvas.width = W * scale;
-    canvas.height = H * scale;
-
-    ctx.fillStyle = '#080810';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const tileColors: Record<number, string> = {
-      0: '#0a0a12',
-      1: '#5a4010',
-      2: '#6a3a20',
-      3: '#3a3a3a',
-      4: '#2a3a3a',
-      5: '#505860',
-      6: '#151528',
-      7: '#0a2a2a',
-      8: '#111111',
-    };
-
-    for (let y = 0; y < H; y++) {
-      for (let x = 0; x < W; x++) {
-        const key = `${x},${y}`;
-        if (!gm.fog.revealed.has(key)) continue;
-
-        const tile = gm.gameMap.tiles[y]?.[x];
-        if (!tile) continue;
-        ctx.fillStyle = tileColors[tile.type] || '#080810';
-        ctx.fillRect(x * scale, y * scale, scale, scale);
-
-        if (tile.ore > 0) {
-          const oreClr: Record<number, string> = {
-            1: '#D2691E', 2: '#4682B4', 3: '#FFD700', 4: '#00CED1', 5: '#FF4500',
-          };
-          ctx.fillStyle = oreClr[tile.ore] || '#fff';
-          ctx.globalAlpha = 0.6;
-          ctx.fillRect(x * scale, y * scale, scale, scale);
-          ctx.globalAlpha = 1;
-        }
-      }
-    }
-
-    const cz = BALANCE.CENTER_ZONE;
-    const t = Date.now() * 0.003;
-    const pulseAlpha = 0.4 + Math.sin(t) * 0.3;
-    ctx.fillStyle = `rgba(0, 206, 209, ${pulseAlpha})`;
-    ctx.fillRect(cz.x * scale, cz.y * scale, cz.width * scale, cz.height * scale);
-    ctx.strokeStyle = '#00CED1';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(cz.x * scale - 1, cz.y * scale - 1, cz.width * scale + 2, cz.height * scale + 2);
-
-    ctx.fillStyle = '#FFB347';
-    ctx.shadowColor = '#FFB347';
-    ctx.shadowBlur = 6;
-    const px = gm.player.x * scale + scale / 2;
-    const py = gm.player.y * scale + scale / 2;
-    ctx.beginPath();
-    ctx.arc(px, py, 3, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-
-    animRef.current = requestAnimationFrame(draw);
-  }, []);
-
-  useEffect(() => {
-    animRef.current = requestAnimationFrame(draw);
-    return () => cancelAnimationFrame(animRef.current);
-  }, [draw]);
-
-  return (
-    <div style={{
-      position: 'absolute', bottom: 70, right: 12, zIndex: 50,
-      background: 'rgba(10,10,26,0.9)',
-      border: '1px solid rgba(0,206,209,0.2)',
-      borderRadius: 6, padding: 4,
-    }}>
-      <div style={{ fontSize: 8, color: '#00CED1', marginBottom: 2, textAlign: 'center', opacity: 0.7 }}>MAP</div>
-      <canvas
-        ref={canvasRef}
-        style={{ display: 'block', borderRadius: 3, imageRendering: 'pixelated' }}
-      />
-    </div>
-  );
-}
 
 export function HUD({
-  resources, upgrades, tilesDug, elapsedMs,
-  encounterType, encounterHp, encounterMaxHp, encounterPlayerHp,
-  onToggleUpgrades,
+  resources, upgrades, tilesDug, scores, pps,
+  timeRemainingMs, playerId, nodes, playerHp, playerMaxHp,
+  dugTiles, onToggleUpgrades,
 }: HUDProps) {
-  const [bounceKey, setBounceKey] = useState('');
-  const prevRef = useRef(resources);
-
-  useEffect(() => {
-    const prev = prevRef.current;
-    for (const key of Object.keys(resources) as (keyof Resources)[]) {
-      if (resources[key] > prev[key]) {
-        setBounceKey(key);
-        setTimeout(() => setBounceKey(''), 300);
-        break;
-      }
-    }
-    prevRef.current = resources;
-  }, [resources.copper, resources.iron, resources.gold, resources.crystal, resources.emberStone]);
-
-  const pickaxeDmg = BALANCE.UPGRADES.PICKAXE.find(p => p.level === upgrades.pickaxeLevel)?.damage || 1;
+  const playerIds = Object.keys(scores);
+  const opponentId = playerIds.find(id => id !== playerId) || '';
+  const myScore = Math.floor(scores[playerId] || 0);
+  const opScore = Math.floor(scores[opponentId] || 0);
+  const myPps = pps[playerId] || 0;
+  const opPps = pps[opponentId] || 0;
+  const myNodes = nodes.filter(n => n.ownerId === playerId).length;
+  const opNodes = nodes.filter(n => n.ownerId === opponentId).length;
+  const hpRatio = playerMaxHp > 0 ? playerHp / playerMaxHp : 1;
+  const timeStr = formatTime(Math.max(0, timeRemainingMs));
+  const isLowTime = timeRemainingMs < 30000;
 
   return (
     <>
-      {/* Resource bar */}
+      {/* Score Bar - Top Center */}
       <div style={{
-        position: 'absolute', top: 12, left: 12, zIndex: 50,
-        display: 'flex', gap: 10, background: 'rgba(8,8,20,0.9)',
-        padding: '8px 14px', borderRadius: 8,
-        border: '1px solid rgba(255,255,255,0.08)',
-        backdropFilter: 'blur(4px)',
+        position: 'absolute', top: 8, left: '50%', transform: 'translateX(-50%)',
+        display: 'flex', alignItems: 'center', gap: 16, zIndex: 50,
+        background: 'rgba(10,10,26,0.85)', borderRadius: 8, padding: '8px 20px',
+        border: '1px solid rgba(255,255,255,0.1)',
         pointerEvents: 'auto' as const,
       }}>
-        {(Object.keys(oreLabels) as (keyof Resources)[]).map(key => (
-          <div
-            key={key}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 4,
-              transform: bounceKey === key ? 'scale(1.4) translateY(-3px)' : 'scale(1)',
-              transition: 'transform 0.15s cubic-bezier(.4,0,.2,1)',
-            }}
-          >
-            <div style={{
-              width: 16, height: 16, borderRadius: 4,
-              background: `linear-gradient(135deg, ${oreColors[key]}, ${oreColors[key]}88)`,
-              boxShadow: resources[key] > 0 ? `0 0 8px ${oreColors[key]}66` : 'none',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 8,
-            }}>
-              {oreLabels[key]}
-            </div>
-            <span style={{
-              fontSize: 11, color: resources[key] > 0 ? oreColors[key] : '#555',
-              fontWeight: 'bold',
-              textShadow: resources[key] > 0 ? `0 0 6px ${oreColors[key]}44` : 'none',
-            }}>
-              {resources[key]}
-            </span>
-          </div>
-        ))}
-      </div>
+        {/* My Score */}
+        <div style={{ textAlign: 'right', minWidth: 80 }}>
+          <div style={{ fontSize: 20, color: '#4488FF', fontWeight: 'bold' }}>{myScore}</div>
+          <div style={{ fontSize: 8, color: '#4488FF88' }}>+{myPps}/s</div>
+        </div>
 
-      {/* Stats - top right */}
-      <div style={{
-        position: 'absolute', top: 12, right: 12, zIndex: 50,
-        background: 'rgba(8,8,20,0.9)',
-        padding: '10px 14px', borderRadius: 8,
-        border: '1px solid rgba(255,255,255,0.08)',
-        fontSize: 10, lineHeight: '20px',
-        pointerEvents: 'auto' as const,
-      }}>
-        <div style={{ color: '#999', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12 }}>&#9201;</span>
-          <span style={{ color: '#ddd', fontVariantNumeric: 'tabular-nums' }}>{formatTime(elapsedMs)}</span>
-        </div>
-        <div style={{ color: '#FFB347', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12 }}>&#9935;</span>
-          <span>Lv.{upgrades.pickaxeLevel}</span>
-          <span style={{ color: '#FF8C42', fontSize: 9 }}>({pickaxeDmg}dmg)</span>
-        </div>
-        <div style={{ color: '#00CED1', display: 'flex', alignItems: 'center', gap: 6 }}>
-          <span style={{ fontSize: 12 }}>&#128161;</span>
-          <span>Range {upgrades.lanternLevel}</span>
-        </div>
-        <div style={{ color: '#888' }}>
-          Tiles: <span style={{ color: '#bbb' }}>{tilesDug}</span>
-        </div>
-      </div>
-
-      {/* Objective hint */}
-      <div style={{
-        position: 'absolute', top: 56, left: '50%', transform: 'translateX(-50%)', zIndex: 50,
-        fontSize: 9, color: 'rgba(0,206,209,0.5)', textAlign: 'center',
-        letterSpacing: 1,
-      }}>
-        DIG TO THE CENTER
-      </div>
-
-      {/* Ability bar */}
-      <div style={{
-        position: 'absolute', bottom: 16, left: '50%', transform: 'translateX(-50%)', zIndex: 50,
-        display: 'flex', gap: 8, background: 'rgba(8,8,20,0.9)',
-        padding: '8px 14px', borderRadius: 10,
-        border: '1px solid rgba(255,255,255,0.08)',
-        pointerEvents: 'auto' as const,
-      }}>
-        <AbilityButton
-          label="Sonar"
-          hotkey="Q"
-          unlocked={upgrades.sonarUnlocked}
-          color="#00CED1"
-        />
-        <AbilityButton
-          label={`TNT${upgrades.dynamiteUnlocked ? ` x${upgrades.dynamiteCharges}` : ''}`}
-          hotkey="E"
-          unlocked={upgrades.dynamiteUnlocked}
-          color="#FF4500"
-        />
-        <div
-          onClick={onToggleUpgrades}
-          style={{
-            padding: '8px 16px', borderRadius: 6, fontSize: 10,
-            background: 'linear-gradient(180deg, rgba(255,179,71,0.2), rgba(255,140,66,0.1))',
-            border: '1px solid rgba(255,179,71,0.4)', color: '#FFB347',
-            cursor: 'pointer',
-            transition: 'all 0.15s',
-          }}
-        >
-          <span style={{ fontSize: 8, color: '#FFB34788' }}>U </span>
-          Upgrades
-        </div>
-      </div>
-
-      {/* Encounter HUD */}
-      {encounterType && (
+        {/* Timer */}
         <div style={{
-          position: 'absolute', top: 70, left: '50%', transform: 'translateX(-50%)', zIndex: 50,
-          background: 'rgba(10,10,26,0.95)',
-          padding: '14px 24px', borderRadius: 10,
-          border: '1px solid rgba(255,68,68,0.3)',
-          textAlign: 'center', minWidth: 240,
-          boxShadow: '0 0 30px rgba(255,68,68,0.1)',
+          textAlign: 'center', padding: '0 12px',
+          borderLeft: '1px solid rgba(255,255,255,0.1)',
+          borderRight: '1px solid rgba(255,255,255,0.1)',
         }}>
           <div style={{
-            fontSize: 14, color: '#FF4444', marginBottom: 10,
-            textShadow: '0 0 10px rgba(255,68,68,0.3)',
-            letterSpacing: 2,
-          }}>
-            {encounterType.replace('_', ' ')}
-          </div>
-          {encounterMaxHp > 0 && (
-            <div style={{
-              width: 220, height: 12, background: '#1a1a2e', borderRadius: 6, overflow: 'hidden',
-              border: '1px solid rgba(255,255,255,0.1)',
-            }}>
-              <div style={{
-                width: `${(encounterHp / encounterMaxHp) * 100}%`,
-                height: '100%',
-                background: encounterHp / encounterMaxHp > 0.5
-                  ? 'linear-gradient(90deg, #22CC22, #44FF44)'
-                  : encounterHp / encounterMaxHp > 0.25
-                    ? 'linear-gradient(90deg, #CCCC22, #FFFF44)'
-                    : 'linear-gradient(90deg, #CC2222, #FF4444)',
-                transition: 'width 0.2s',
-                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.2)',
-              }} />
-            </div>
-          )}
-          {(encounterType === 'GUARDIAN' || encounterType === 'MIRROR') && (
-            <div style={{
-              fontSize: 10, color: '#FFB347', marginTop: 8,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-            }}>
-              <span>Your HP:</span>
-              <span style={{ color: encounterPlayerHp > 50 ? '#44FF44' : encounterPlayerHp > 25 ? '#FFFF44' : '#FF4444' }}>
-                {encounterPlayerHp}
-              </span>
-            </div>
-          )}
-          <div style={{ fontSize: 8, color: '#666', marginTop: 8 }}>
-            Click to attack!
+            fontSize: 14, color: isLowTime ? '#FF4444' : '#CCCCCC',
+            animation: isLowTime ? 'blink 0.5s infinite' : undefined,
+          }}>{timeStr}</div>
+          <div style={{ fontSize: 7, color: '#666', marginTop: 2 }}>
+            FIRST TO {BALANCE.SCORING.WIN_THRESHOLD}
           </div>
         </div>
-      )}
 
-      {/* Minimap */}
-      <Minimap />
+        {/* Opponent Score */}
+        <div style={{ textAlign: 'left', minWidth: 80 }}>
+          <div style={{ fontSize: 20, color: '#FF4444', fontWeight: 'bold' }}>{opScore}</div>
+          <div style={{ fontSize: 8, color: '#FF444488' }}>+{opPps}/s</div>
+        </div>
+      </div>
+
+      {/* HP Bar - Below Score */}
+      <div style={{
+        position: 'absolute', top: 60, left: '50%', transform: 'translateX(-50%)',
+        width: 160, zIndex: 50,
+      }}>
+        <div style={{
+          background: 'rgba(10,10,26,0.7)', borderRadius: 4, padding: 2,
+          border: '1px solid rgba(255,255,255,0.05)',
+        }}>
+          <div style={{
+            height: 6, borderRadius: 3, background: '#222',
+          }}>
+            <div style={{
+              height: '100%', borderRadius: 3,
+              width: `${Math.max(0, hpRatio * 100)}%`,
+              background: hpRatio > 0.5 ? '#44FF44' : hpRatio > 0.25 ? '#FFFF44' : '#FF4444',
+              transition: 'width 0.3s',
+            }} />
+          </div>
+          <div style={{ fontSize: 7, color: '#888', textAlign: 'center', marginTop: 1 }}>
+            HP {playerHp}/{playerMaxHp}
+          </div>
+        </div>
+      </div>
+
+      {/* Resources - Bottom Left */}
+      <div style={{
+        position: 'absolute', bottom: 12, left: 12, zIndex: 50,
+        background: 'rgba(10,10,26,0.85)', borderRadius: 8, padding: '8px 12px',
+        border: '1px solid rgba(255,255,255,0.08)',
+        pointerEvents: 'auto' as const,
+      }}>
+        <div style={{ display: 'flex', gap: 10, marginBottom: 6 }}>
+          {Object.entries(resources).map(([key, val]) => (
+            <div key={key} style={{ textAlign: 'center' }}>
+              <div style={{ fontSize: 12, color: oreColors[key], fontWeight: 'bold' }}>{val}</div>
+              <div style={{ fontSize: 7, color: oreColors[key] + '88' }}>{oreLabels[key]}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', gap: 8, fontSize: 8, color: '#666' }}>
+          <span>Tiles: {tilesDug}</span>
+          <span>Pick Lv.{upgrades.pickaxeLevel}</span>
+        </div>
+      </div>
+
+      {/* Controls - Bottom Center */}
+      <div style={{
+        position: 'absolute', bottom: 12, left: '50%', transform: 'translateX(-50%)',
+        display: 'flex', gap: 6, zIndex: 50,
+        pointerEvents: 'auto' as const,
+      }}>
+        <button onClick={onToggleUpgrades} style={{
+          background: 'rgba(10,10,26,0.85)', border: '1px solid rgba(0,206,209,0.3)',
+          color: '#00CED1', padding: '6px 14px', borderRadius: 6,
+          fontSize: 9, fontFamily: 'inherit', cursor: 'pointer',
+        }}>
+          [U] Upgrades
+        </button>
+        {upgrades.sonarUnlocked && (
+          <button style={{
+            background: 'rgba(10,10,26,0.85)', border: '1px solid rgba(0,206,209,0.3)',
+            color: '#00CED1', padding: '6px 10px', borderRadius: 6,
+            fontSize: 9, fontFamily: 'inherit', cursor: 'pointer',
+          }}>
+            [Q] Sonar
+          </button>
+        )}
+        {upgrades.dynamiteUnlocked && (
+          <button style={{
+            background: 'rgba(10,10,26,0.85)', border: '1px solid rgba(255,69,0,0.3)',
+            color: '#FF4500', padding: '6px 10px', borderRadius: 6,
+            fontSize: 9, fontFamily: 'inherit', cursor: 'pointer',
+          }}>
+            [E] TNT x{upgrades.dynamiteCharges}
+          </button>
+        )}
+        <button style={{
+          background: 'rgba(10,10,26,0.85)', border: '1px solid rgba(255,68,68,0.3)',
+          color: '#FF4444', padding: '6px 10px', borderRadius: 6,
+          fontSize: 9, fontFamily: 'inherit', cursor: 'pointer',
+        }}>
+          [F] Attack
+        </button>
+      </div>
+
+      {/* Mini-map - Bottom Right */}
+      <div style={{
+        position: 'absolute', bottom: 12, right: 12, zIndex: 50,
+        background: 'rgba(10,10,26,0.85)', borderRadius: 8, padding: 8,
+        border: '1px solid rgba(255,255,255,0.08)',
+      }}>
+        <div style={{ fontSize: 7, color: '#666', marginBottom: 4, textAlign: 'center' }}>
+          NODES {myNodes} claimed
+        </div>
+        <div style={{ position: 'relative', width: 120, height: 80 }}>
+          <canvas
+            ref={(el) => {
+              if (!el) return;
+              const ctx = el.getContext('2d');
+              if (!ctx) return;
+              ctx.clearRect(0, 0, 120, 80);
+              ctx.fillStyle = '#0a0a14';
+              ctx.fillRect(0, 0, 120, 80);
+
+              ctx.fillStyle = 'rgba(100,100,120,0.4)';
+              for (const key of dugTiles) {
+                const [xs, ys] = key.split(',');
+                const px = (parseInt(xs) / BALANCE.MAP_WIDTH) * 120;
+                const py = (parseInt(ys) / BALANCE.MAP_HEIGHT) * 80;
+                ctx.fillRect(Math.floor(px), Math.floor(py), 2, 2);
+              }
+
+              for (const node of nodes) {
+                if (node.ownerId !== playerId) continue;
+                const nx = (node.x / BALANCE.MAP_WIDTH) * 120;
+                const ny = (node.y / BALANCE.MAP_HEIGHT) * 80;
+                const size = node.tier === NodeTier.CORE ? 5 : node.tier === NodeTier.MID ? 4 : 3;
+                ctx.fillStyle = '#4488FF';
+                ctx.shadowColor = '#4488FF';
+                ctx.shadowBlur = 4;
+                ctx.beginPath();
+                ctx.arc(nx, ny, size, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.shadowBlur = 0;
+              }
+            }}
+            width={120}
+            height={80}
+            style={{ borderRadius: 4, border: '1px solid rgba(255,255,255,0.05)' }}
+          />
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes blink {
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.3; }
+        }
+      `}</style>
     </>
-  );
-}
-
-function AbilityButton({ label, hotkey, unlocked, color }: {
-  label: string; hotkey: string; unlocked: boolean; color: string;
-}) {
-  return (
-    <div style={{
-      padding: '8px 14px', borderRadius: 6, fontSize: 10,
-      background: unlocked
-        ? `linear-gradient(180deg, ${color}22, ${color}11)`
-        : 'rgba(255,255,255,0.03)',
-      border: unlocked ? `1px solid ${color}66` : '1px solid rgba(255,255,255,0.06)',
-      color: unlocked ? color : '#444',
-      cursor: unlocked ? 'pointer' : 'default',
-      opacity: unlocked ? 1 : 0.6,
-      transition: 'all 0.15s',
-    }}>
-      <span style={{ fontSize: 8, opacity: 0.6 }}>{hotkey} </span>
-      {label}
-      {!unlocked && <span style={{ marginLeft: 4, fontSize: 8 }}>&#128274;</span>}
-    </div>
   );
 }

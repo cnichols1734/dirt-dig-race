@@ -1,4 +1,4 @@
-import { TileType, OreType, TileData, MapConfig } from '@dig/shared';
+import { TileType, OreType, TileData, MapConfig, OreNode, NodeTier } from '@dig/shared';
 import { BALANCE } from '@dig/shared';
 
 class SeededRandom {
@@ -36,13 +36,115 @@ export function generateMap(config: MapConfig): TileData[][] {
   applyBiomes(map, width, height, rng);
   smoothBiomes(map, width, height, rng);
   placeOreVeins(map, width, height, rng);
-  carveCaves(map, width, height, rng);
-  placeCenterZone(map);
+  carveCaves(map, width, height, rng, config.seed);
+  placeOreNodeClearings(map, width, height, config.seed);
   placeBedrock(map, width, height);
   carveSpawns(map, width, height);
-  ensurePaths(map, width, height);
 
   return map;
+}
+
+export function generateNodePositions(seed: number): Array<{ id: string; x: number; y: number; tier: string }> {
+  const rng = new SeededRandom(seed + 999);
+  const positions: Array<{ id: string; x: number; y: number; tier: string }> = [];
+  const w = BALANCE.MAP_WIDTH;
+
+  const tooClose = (x: number, y: number) =>
+    positions.some(p => Math.abs(p.x - x) < 6 && Math.abs(p.y - y) < 6);
+
+  for (let i = 0; i < BALANCE.NODES.NODE_COUNT_PER_SIDE; i++) {
+    for (let attempt = 0; attempt < 30; attempt++) {
+      let tier: string, xRange: readonly number[], yRange: readonly number[];
+      if (i === 0) {
+        tier = 'HOME';
+        xRange = BALANCE.NODES.HOME_X_RANGE;
+        yRange = BALANCE.NODES.HOME_Y_RANGE;
+      } else {
+        tier = 'MID';
+        xRange = BALANCE.NODES.MID_X_RANGE;
+        yRange = BALANCE.NODES.MID_Y_RANGE;
+      }
+
+      const lx = rng.nextInt(xRange[0], xRange[1]);
+      const ly = rng.nextInt(yRange[0], yRange[1]);
+      const rx = w - 1 - lx;
+      const ry = ly;
+
+      if (!tooClose(lx, ly) && !tooClose(rx, ry)) {
+        positions.push({ id: `${tier.toLowerCase()}-left-${i}`, x: lx, y: ly, tier });
+        positions.push({ id: `${tier.toLowerCase()}-right-${i}`, x: rx, y: ry, tier });
+        break;
+      }
+    }
+  }
+
+  for (let attempt = 0; attempt < 30; attempt++) {
+    const cx = rng.nextInt(BALANCE.NODES.CORE_X_RANGE[0], BALANCE.NODES.CORE_X_RANGE[1]);
+    const cy = rng.nextInt(BALANCE.NODES.CORE_Y_RANGE[0], BALANCE.NODES.CORE_Y_RANGE[1]);
+    if (!tooClose(cx, cy)) {
+      positions.push({ id: 'core-center', x: cx, y: cy, tier: 'CORE' });
+      break;
+    }
+  }
+
+  return positions;
+}
+
+export function getNodeDefinitions(seed: number): OreNode[] {
+  const positions = generateNodePositions(seed);
+  return positions.map(pos => {
+    const tier = pos.tier as NodeTier;
+    let pps = BALANCE.NODES.HOME_PTS_PER_SEC;
+    if (tier === NodeTier.MID) pps = BALANCE.NODES.MID_PTS_PER_SEC;
+    if (tier === NodeTier.CORE) pps = BALANCE.NODES.CORE_PTS_PER_SEC;
+
+    return {
+      id: pos.id,
+      x: pos.x,
+      y: pos.y,
+      tier,
+      ownerId: null,
+      claimProgress: 0,
+      claimMax: BALANCE.NODES.CLAIM_CLICKS,
+      pointsPerSecond: pps,
+      supercharged: false,
+      discoveredBy: [],
+    };
+  });
+}
+
+function placeOreNodeClearings(map: TileData[][], width: number, height: number, seed: number) {
+  const positions = generateNodePositions(seed);
+  const size = BALANCE.NODES.NODE_SIZE;
+  const half = Math.floor(size / 2);
+  const shellR = BALANCE.NODES.HARD_SHELL_RADIUS;
+
+  for (const pos of positions) {
+    for (let dy = -shellR; dy <= shellR; dy++) {
+      for (let dx = -shellR; dx <= shellR; dx++) {
+        const nx = pos.x + dx;
+        const ny = pos.y + dy;
+        if (nx <= 0 || nx >= width - 1 || ny <= 0 || ny >= height - 1) continue;
+
+        if (Math.abs(dx) <= half && Math.abs(dy) <= half) {
+          map[ny][nx].type = TileType.NODE_FLOOR;
+          map[ny][nx].hp = 0;
+          map[ny][nx].maxHp = 0;
+          map[ny][nx].ore = OreType.NONE;
+        } else if (Math.abs(dx) <= half + 1 && Math.abs(dy) <= half + 1) {
+          map[ny][nx].type = TileType.OBSIDIAN;
+          map[ny][nx].hp = BALANCE.TILE_HP.OBSIDIAN;
+          map[ny][nx].maxHp = BALANCE.TILE_HP.OBSIDIAN;
+          map[ny][nx].ore = OreType.NONE;
+        } else {
+          map[ny][nx].type = TileType.GRANITE;
+          map[ny][nx].hp = BALANCE.TILE_HP.GRANITE;
+          map[ny][nx].maxHp = BALANCE.TILE_HP.GRANITE;
+          map[ny][nx].ore = OreType.NONE;
+        }
+      }
+    }
+  }
 }
 
 function getBiome(x: number): string {
@@ -105,7 +207,7 @@ function smoothBiomes(map: TileData[][], width: number, height: number, rng: See
         let maxType = map[y][x].type;
         let maxCount = 0;
         for (const [t, c] of counts) {
-          if (c > maxCount && t !== TileType.EMPTY && t !== TileType.BEDROCK) {
+          if (c > maxCount && t !== TileType.EMPTY && t !== TileType.BEDROCK && t !== TileType.NODE_FLOOR) {
             maxCount = c;
             maxType = t;
           }
@@ -181,7 +283,8 @@ function spreadOreVeins(map: TileData[][], width: number, height: number, rng: S
         const nx = cx + dx, ny = cy + dy;
         if (nx > 0 && nx < width - 1 && ny > 0 && ny < height - 1) {
           const ntile = map[ny][nx];
-          if (ntile.type !== TileType.EMPTY && ntile.type !== TileType.BEDROCK && ntile.ore === OreType.NONE) {
+          if (ntile.type !== TileType.EMPTY && ntile.type !== TileType.BEDROCK &&
+              ntile.type !== TileType.NODE_FLOOR && ntile.ore === OreType.NONE) {
             ntile.ore = oreType;
             visited.add(`${nx},${ny}`);
           }
@@ -192,13 +295,18 @@ function spreadOreVeins(map: TileData[][], width: number, height: number, rng: S
   }
 }
 
-function carveCaves(map: TileData[][], width: number, height: number, rng: SeededRandom) {
+function carveCaves(map: TileData[][], width: number, height: number, rng: SeededRandom, seed: number) {
   const caveCount = rng.nextInt(BALANCE.CAVE_COUNT_MIN, BALANCE.CAVE_COUNT_MAX);
+  const nodePositions = generateNodePositions(seed);
+
   for (let i = 0; i < caveCount; i++) {
     const cx = rng.nextInt(5, width - 6);
     const cy = rng.nextInt(5, height - 6);
-    const cz = BALANCE.CENTER_ZONE;
-    if (Math.abs(cx - (cz.x + 1)) < 4 && Math.abs(cy - (cz.y + 1)) < 4) continue;
+
+    const tooCloseToNode = nodePositions.some(
+      n => Math.abs(cx - n.x) < 6 && Math.abs(cy - n.y) < 6
+    );
+    if (tooCloseToNode) continue;
 
     const size = rng.nextInt(BALANCE.CAVE_SIZE_MIN, BALANCE.CAVE_SIZE_MAX);
     const radius = Math.ceil(Math.sqrt(size));
@@ -219,20 +327,6 @@ function carveCaves(map: TileData[][], width: number, height: number, rng: Seede
   }
 }
 
-function placeCenterZone(map: TileData[][]) {
-  const cz = BALANCE.CENTER_ZONE;
-  for (let dy = 0; dy < cz.height; dy++) {
-    for (let dx = 0; dx < cz.width; dx++) {
-      const x = cz.x + dx;
-      const y = cz.y + dy;
-      map[y][x].type = TileType.CRYSTAL_WALL;
-      map[y][x].hp = BALANCE.TILE_HP.CRYSTAL_WALL;
-      map[y][x].maxHp = BALANCE.TILE_HP.CRYSTAL_WALL;
-      map[y][x].ore = OreType.NONE;
-    }
-  }
-}
-
 function placeBedrock(map: TileData[][], width: number, height: number) {
   for (let x = 0; x < width; x++) {
     map[0][x] = { type: TileType.BEDROCK, ore: OreType.NONE, hp: 9999, maxHp: 9999, x, y: 0 };
@@ -244,14 +338,14 @@ function placeBedrock(map: TileData[][], width: number, height: number) {
   }
 }
 
-function carveSpawns(map: TileData[][], width: number, _height: number) {
-  const spawnY = Math.floor(_height / 2);
+function carveSpawns(map: TileData[][], width: number, height: number) {
+  const spawnY = Math.floor(height / 2);
   for (let dx = 0; dx < 3; dx++) {
     const lx = 1 + dx;
     const rx = width - 2 - dx;
     for (let dy = -1; dy <= 1; dy++) {
       const ny = spawnY + dy;
-      if (ny > 0 && ny < _height - 1) {
+      if (ny > 0 && ny < height - 1) {
         map[ny][lx].type = TileType.EMPTY;
         map[ny][lx].hp = 0; map[ny][lx].maxHp = 0;
         map[ny][lx].ore = OreType.NONE;
@@ -261,34 +355,6 @@ function carveSpawns(map: TileData[][], width: number, _height: number) {
         map[ny][rx].ore = OreType.NONE;
       }
     }
-  }
-}
-
-function ensurePaths(map: TileData[][], width: number, height: number) {
-  const spawnY = Math.floor(height / 2);
-  const cx = BALANCE.CENTER_ZONE.x + 1;
-  const cy = BALANCE.CENTER_ZONE.y + 1;
-
-  ensurePath(map, 2, spawnY, cx, cy, width, height);
-  ensurePath(map, width - 3, spawnY, cx, cy, width, height);
-}
-
-function ensurePath(map: TileData[][], sx: number, sy: number, ex: number, ey: number, _w: number, h: number) {
-  let x = sx, y = sy;
-  let steps = 0;
-  while ((x !== ex || y !== ey) && steps < 200) {
-    if (map[y][x].type === TileType.BEDROCK) break;
-
-    const dx = ex - x;
-    const dy = ey - y;
-    if (Math.abs(dx) > Math.abs(dy)) {
-      x += dx > 0 ? 1 : -1;
-    } else {
-      y += dy > 0 ? 1 : -1;
-    }
-
-    if (x <= 0 || x >= _w - 1 || y <= 0 || y >= h - 1) break;
-    steps++;
   }
 }
 
