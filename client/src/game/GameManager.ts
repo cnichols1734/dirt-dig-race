@@ -11,6 +11,7 @@ import { ParticleSystem } from './Particles';
 import { JuiceSystem } from './Juice';
 import { SonarSystem } from './Sonar';
 import { CombatSystem } from './Combat';
+import { Minimap } from './Minimap';
 import { audioManager } from './Audio';
 import { socketManager } from '../network/Socket';
 
@@ -29,6 +30,7 @@ export class GameManager {
   juice: JuiceSystem;
   sonar: SonarSystem;
   combat: CombatSystem;
+  minimap: Minimap;
 
   phase: GamePhase = GamePhase.LOBBY;
   playerId: string = '';
@@ -49,6 +51,7 @@ export class GameManager {
   private lastClickTime: number = 0;
   private clickCount: number = 0;
   private initialized = false;
+  private caveInCount: number = 0;
 
   constructor(app: Application) {
     this.app = app;
@@ -64,6 +67,7 @@ export class GameManager {
     this.juice = new JuiceSystem();
     this.sonar = new SonarSystem();
     this.combat = new CombatSystem();
+    this.minimap = new Minimap();
 
     this.app.stage.addChild(this.worldContainer);
     this.app.stage.addChild(this.uiContainer);
@@ -77,6 +81,7 @@ export class GameManager {
     this.worldContainer.addChild(this.particles.container);
     this.worldContainer.addChild(this.fog.container);
     this.uiContainer.addChild(this.juice.container);
+    this.uiContainer.addChild(this.minimap.container);
 
     this.camera.setScreenSize(app.screen.width, app.screen.height);
 
@@ -164,6 +169,12 @@ export class GameManager {
       }
     });
 
+    canvas.addEventListener('wheel', (e: WheelEvent) => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? -0.08 : 0.08;
+      this.camera.adjustZoom(delta);
+    }, { passive: false });
+
     window.addEventListener('resize', () => {
       this.camera.setScreenSize(window.innerWidth, window.innerHeight);
     });
@@ -236,6 +247,7 @@ export class GameManager {
             this.fog.revealAround(t.x, t.y, this.player.upgrades.lanternLevel);
             this.lighting.updateLantern(this.player.x, this.player.y, this.player.upgrades.lanternLevel);
             this.lighting.updateOreGlows(this.gameMap.tiles, this.fog.revealed);
+            this.minimap.markDirty();
 
             if (t.ore !== OreType.NONE && t.ore !== undefined) {
               this.particles.oreCollect(wx, wy, t.ore);
@@ -486,19 +498,24 @@ export class GameManager {
           const wx = op.x * SCALED_TILE + SCALED_TILE / 2;
           const wy = op.y * SCALED_TILE + SCALED_TILE / 2;
           this.combat.showOpponent(wx, wy, op.hp || 50, op.maxHp || 50);
+          this.minimap.updateOpponent(op.x, op.y);
           this.emit('opponentPosition', op);
           break;
         }
 
         case 'CAVE_IN': {
           const ci = msg.payload;
+          this.caveInCount++;
           this.camera.shake(8, 400);
+          audioManager.playTremor();
           for (const ct of ci.collapsedTiles) {
-            this.gameMap.updateTile(ct.x, ct.y, 9999, false);
+            this.gameMap.collapseTile(ct.x, ct.y);
             const wx = ct.x * SCALED_TILE + SCALED_TILE / 2;
             const wy = ct.y * SCALED_TILE + SCALED_TILE / 2;
             this.particles.collapseDust(wx, wy);
           }
+          this.fog.markDirty();
+          this.juice.setCaveInIntensity(Math.min(1, this.caveInCount * 0.15));
           this.gameMap.updateNodes(this.nodes, this.playerIndex);
           this.emit('caveIn', ci);
           break;
@@ -598,6 +615,9 @@ export class GameManager {
             );
           }
         }
+
+        this.minimap.updatePlayer(this.player.x, this.player.y);
+        this.minimap.update(dt, this.fog.revealed, this.gameMap.tiles);
       }
 
       this.camera.update(dt);

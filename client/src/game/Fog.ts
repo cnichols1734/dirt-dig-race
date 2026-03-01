@@ -128,6 +128,10 @@ export class FogOfWar {
     return false;
   }
 
+  markDirty() {
+    this.dirty = true;
+  }
+
   isRevealed(x: number, y: number): boolean {
     return this.revealed.has(`${x},${y}`) || this.sonarRevealed.has(`${x},${y}`);
   }

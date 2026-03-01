@@ -15,12 +15,22 @@ export class JuiceSystem {
   private flashTimer: number = 0;
   private flashMaxTimer: number = 100;
   private flashMaxAlpha: number = 0.3;
+  private caveInVignette: Graphics;
+  private caveInIntensity: number = 0;
+  private caveInPhase: number = 0;
 
   constructor() {
     this.container = new Container();
     this.screenFlash = new Graphics();
     this.screenFlash.alpha = 0;
     this.container.addChild(this.screenFlash);
+    this.caveInVignette = new Graphics();
+    this.caveInVignette.alpha = 0;
+    this.container.addChild(this.caveInVignette);
+  }
+
+  setCaveInIntensity(intensity: number) {
+    this.caveInIntensity = Math.min(1, Math.max(0, intensity));
   }
 
   spawnDamageNumber(wx: number, wy: number, damage: number, color: number = 0xFFFFFF) {
@@ -74,6 +84,26 @@ export class JuiceSystem {
     if (this.flashTimer > 0) {
       this.flashTimer -= dt;
       this.screenFlash.alpha = Math.max(0, this.flashTimer / this.flashMaxTimer) * this.flashMaxAlpha;
+    }
+
+    if (this.caveInIntensity > 0) {
+      this.caveInPhase += dt * 0.004;
+      const pulse = 0.6 + Math.sin(this.caveInPhase) * 0.4;
+      const w = window.innerWidth * 2;
+      const h = window.innerHeight * 2;
+      const thickness = 40 + this.caveInIntensity * 80;
+      this.caveInVignette.clear();
+      this.caveInVignette.rect(0, 0, w, thickness);
+      this.caveInVignette.fill({ color: 0xFF2200, alpha: 0.5 });
+      this.caveInVignette.rect(0, h - thickness, w, thickness);
+      this.caveInVignette.fill({ color: 0xFF2200, alpha: 0.5 });
+      this.caveInVignette.rect(0, 0, thickness, h);
+      this.caveInVignette.fill({ color: 0xFF2200, alpha: 0.5 });
+      this.caveInVignette.rect(w - thickness, 0, thickness, h);
+      this.caveInVignette.fill({ color: 0xFF2200, alpha: 0.5 });
+      this.caveInVignette.alpha = this.caveInIntensity * 0.35 * pulse;
+    } else {
+      this.caveInVignette.alpha = 0;
     }
 
     for (let i = this.damageNumbers.length - 1; i >= 0; i--) {

@@ -38,9 +38,23 @@ export class Camera {
     this.shakeTimer = duration;
   }
 
+  private baseZoom: number = 1;
+  private microZoomActive: boolean = false;
+
   microZoom(amount: number = 0.02, duration: number = 200) {
-    this.targetZoom = 1 + amount;
-    setTimeout(() => { this.targetZoom = 1; }, duration / 2);
+    this.microZoomActive = true;
+    this.targetZoom = this.baseZoom + amount;
+    setTimeout(() => {
+      this.targetZoom = this.baseZoom;
+      this.microZoomActive = false;
+    }, duration / 2);
+  }
+
+  adjustZoom(delta: number) {
+    this.baseZoom = Math.max(0.4, Math.min(2.0, this.baseZoom + delta));
+    if (!this.microZoomActive) {
+      this.targetZoom = this.baseZoom;
+    }
   }
 
   update(dt: number) {
