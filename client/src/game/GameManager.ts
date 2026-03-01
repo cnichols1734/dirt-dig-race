@@ -463,6 +463,24 @@ export class GameManager {
           break;
         }
 
+        case 'OPPONENT_TILE_UPDATE': {
+          const ot = msg.payload;
+          const tile = this.gameMap.getTile(ot.x, ot.y);
+          if (!tile) break;
+          const prevType = tile.type;
+          const wx = ot.x * SCALED_TILE + SCALED_TILE / 2;
+          const wy = ot.y * SCALED_TILE + SCALED_TILE / 2;
+
+          if (ot.broken) {
+            this.gameMap.updateTile(ot.x, ot.y, 0, true);
+            this.particles.tileBreak(wx, wy, prevType);
+            this.fog.revealTile(ot.x, ot.y);
+          } else {
+            this.gameMap.updateTile(ot.x, ot.y, ot.hp, false);
+          }
+          break;
+        }
+
         case 'OPPONENT_POSITION': {
           const op = msg.payload;
           const wx = op.x * SCALED_TILE + SCALED_TILE / 2;

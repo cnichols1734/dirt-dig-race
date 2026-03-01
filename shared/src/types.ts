@@ -161,6 +161,7 @@ export type ServerMessageType =
   | 'GAME_OVER'
   | 'PLAYER_STATE'
   | 'OPPONENT_POSITION'
+  | 'OPPONENT_TILE_UPDATE'
   | 'ERROR';
 
 export interface ServerMessage {
