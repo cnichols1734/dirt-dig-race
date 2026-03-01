@@ -193,6 +193,13 @@ export class GameManager {
           this.gameDurationMs = p.gameDurationMs;
           this.timeRemainingMs = p.gameDurationMs;
           this.phase = GamePhase.COUNTDOWN;
+          this.caveInCount = 0;
+          this.scores = {};
+          this.pps = {};
+
+          this.fog.reset();
+          this.minimap.reset();
+          this.juice.setCaveInIntensity(0);
 
           this.gameMap.generate(p.mapSeed);
           this.gameMap.buildSprites();
@@ -426,6 +433,7 @@ export class GameManager {
               const wy = p.y * SCALED_TILE + SCALED_TILE / 2;
               this.combat.showOpponent(wx, wy, 50, 50);
               this.sonar.showEnemyBlip(p.x, p.y);
+              this.minimap.showOpponentBlip(p.x, p.y, ts.durationMs);
               setTimeout(() => this.combat.hideOpponent(), ts.durationMs);
             }
           }
@@ -498,7 +506,9 @@ export class GameManager {
           const wx = op.x * SCALED_TILE + SCALED_TILE / 2;
           const wy = op.y * SCALED_TILE + SCALED_TILE / 2;
           this.combat.showOpponent(wx, wy, op.hp || 50, op.maxHp || 50);
-          this.minimap.updateOpponent(op.x, op.y);
+          if (this.fog.isRevealed(op.x, op.y)) {
+            this.minimap.showOpponentBlip(op.x, op.y, 2000);
+          }
           this.emit('opponentPosition', op);
           break;
         }

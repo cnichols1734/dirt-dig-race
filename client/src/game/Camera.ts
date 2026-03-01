@@ -25,6 +25,23 @@ export class Camera {
   setScreenSize(w: number, h: number) {
     this.screenWidth = w;
     this.screenHeight = h;
+    this.applyResponsiveZoom();
+  }
+
+  private applyResponsiveZoom() {
+    const minDim = Math.min(this.screenWidth, this.screenHeight);
+    if (minDim < 500) {
+      this.baseZoom = 0.45;
+    } else if (minDim < 700) {
+      this.baseZoom = 0.55;
+    } else if (minDim < 900) {
+      this.baseZoom = 0.7;
+    } else {
+      this.baseZoom = 1;
+    }
+    if (!this.microZoomActive) {
+      this.targetZoom = this.baseZoom;
+    }
   }
 
   lookAt(tileX: number, tileY: number) {
@@ -51,7 +68,7 @@ export class Camera {
   }
 
   adjustZoom(delta: number) {
-    this.baseZoom = Math.max(0.4, Math.min(2.0, this.baseZoom + delta));
+    this.baseZoom = Math.max(0.3, Math.min(2.0, this.baseZoom + delta));
     if (!this.microZoomActive) {
       this.targetZoom = this.baseZoom;
     }

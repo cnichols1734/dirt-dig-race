@@ -128,6 +128,15 @@ export class FogOfWar {
     return false;
   }
 
+  reset() {
+    this.revealed.clear();
+    this.sonarRevealed.clear();
+    this.fadingTiles.clear();
+    this.sonarTimer = 0;
+    this.fogGraphics.clear();
+    this.dirty = true;
+  }
+
   markDirty() {
     this.dirty = true;
   }

@@ -4,8 +4,14 @@ import { BALANCE } from '@dig/shared';
 
 const MAP_W = BALANCE.MAP_WIDTH;
 const MAP_H = BALANCE.MAP_HEIGHT;
-const MINI_SCALE = 2;
 const PADDING = 10;
+
+function getMiniScale(): number {
+  const minDim = Math.min(window.innerWidth, window.innerHeight);
+  if (minDim < 500) return 1;
+  if (minDim < 700) return 1.5;
+  return 2;
+}
 
 export class Minimap {
   container: Container;
@@ -16,9 +22,11 @@ export class Minimap {
   private border: Graphics;
   private dirty = true;
   private redrawTimer = 0;
+  private scale: number;
 
   constructor() {
     this.container = new Container();
+    this.scale = getMiniScale();
 
     this.bg = new Graphics();
     this.mapGraphics = new Graphics();
@@ -33,18 +41,34 @@ export class Minimap {
     this.container.addChild(this.border);
 
     this.opponentDot.visible = false;
-
-    const w = MAP_W * MINI_SCALE;
-    const h = MAP_H * MINI_SCALE;
-    this.bg.rect(0, 0, w, h);
-    this.bg.fill({ color: 0x050510, alpha: 0.85 });
-
-    this.border.rect(0, 0, w, h);
-    this.border.stroke({ color: 0x444466, width: 1, alpha: 0.6 });
+    this.drawFrame();
 
     this.container.x = PADDING;
     this.container.y = PADDING;
     this.container.alpha = 0.8;
+  }
+
+  private drawFrame() {
+    const w = MAP_W * this.scale;
+    const h = MAP_H * this.scale;
+    this.bg.clear();
+    this.bg.rect(0, 0, w, h);
+    this.bg.fill({ color: 0x050510, alpha: 0.85 });
+    this.border.clear();
+    this.border.rect(0, 0, w, h);
+    this.border.stroke({ color: 0x444466, width: 1, alpha: 0.6 });
+  }
+
+  reset() {
+    this.scale = getMiniScale();
+    this.drawFrame();
+    this.mapGraphics.clear();
+    this.playerDot.clear();
+    this.opponentDot.clear();
+    this.opponentDot.visible = false;
+    this.opponentVisibleTimer = 0;
+    this.dirty = true;
+    this.redrawTimer = 0;
   }
 
   markDirty() {
@@ -53,6 +77,7 @@ export class Minimap {
 
   updateMap(revealed: Set<string>, tiles: { type: TileType }[][]) {
     this.mapGraphics.clear();
+    const s = this.scale;
 
     for (const key of revealed) {
       const [xs, ys] = key.split(',');
@@ -74,29 +99,37 @@ export class Minimap {
         case TileType.BEDROCK: color = 0x0a0a0a; break;
       }
 
-      this.mapGraphics.rect(x * MINI_SCALE, y * MINI_SCALE, MINI_SCALE, MINI_SCALE);
+      this.mapGraphics.rect(x * s, y * s, s, s);
       this.mapGraphics.fill(color);
     }
     this.dirty = false;
   }
 
   updatePlayer(tx: number, ty: number) {
+    const s = this.scale;
     this.playerDot.clear();
-    this.playerDot.circle(tx * MINI_SCALE + MINI_SCALE / 2, ty * MINI_SCALE + MINI_SCALE / 2, 3);
+    this.playerDot.circle(tx * s + s / 2, ty * s + s / 2, 3);
     this.playerDot.fill(0x44AAFF);
-    this.playerDot.circle(tx * MINI_SCALE + MINI_SCALE / 2, ty * MINI_SCALE + MINI_SCALE / 2, 5);
+    this.playerDot.circle(tx * s + s / 2, ty * s + s / 2, 5);
     this.playerDot.fill({ color: 0x44AAFF, alpha: 0.3 });
   }
 
-  updateOpponent(tx: number, ty: number) {
+  private opponentVisibleTimer: number = 0;
+
+  showOpponentBlip(tx: number, ty: number, durationMs: number = 2000) {
+    const s = this.scale;
     this.opponentDot.visible = true;
     this.opponentDot.clear();
-    this.opponentDot.circle(tx * MINI_SCALE + MINI_SCALE / 2, ty * MINI_SCALE + MINI_SCALE / 2, 3);
+    this.opponentDot.circle(tx * s + s / 2, ty * s + s / 2, 3);
     this.opponentDot.fill(0xFF4444);
+    this.opponentDot.circle(tx * s + s / 2, ty * s + s / 2, 5);
+    this.opponentDot.fill({ color: 0xFF4444, alpha: 0.3 });
+    this.opponentVisibleTimer = durationMs;
   }
 
   hideOpponent() {
     this.opponentDot.visible = false;
+    this.opponentVisibleTimer = 0;
   }
 
   update(dt: number, revealed: Set<string>, tiles: { type: TileType }[][]) {
@@ -104,6 +137,13 @@ export class Minimap {
     if (this.redrawTimer <= 0 || this.dirty) {
       this.updateMap(revealed, tiles);
       this.redrawTimer = 1000;
+    }
+
+    if (this.opponentVisibleTimer > 0) {
+      this.opponentVisibleTimer -= dt;
+      if (this.opponentVisibleTimer <= 0) {
+        this.opponentDot.visible = false;
+      }
     }
   }
 }
